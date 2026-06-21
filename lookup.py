@@ -40,7 +40,7 @@ def get_player(pid):
 def fetch_single_rank(player, sort_by, scope="global"):
     score = player.get(sort_by)
     if score is None or score == 0:
-        return "N/A"
+        return "?"
 
     filters = {
         sort_by: [score, 999999999]
@@ -63,9 +63,9 @@ def fetch_single_rank(player, sort_by, scope="global"):
     print(url)
     try:
         data = fetchapi(url)
-        return data.get("count", "N/A")
+        return data.get("count", "?")
     except:
-        return "N/A"
+        return "?"
 
 def get_all_ranks(player):
     metrics = {
@@ -84,10 +84,8 @@ def get_all_ranks(player):
         if rank_key in player and player[rank_key] is not None:
             g_rank = player[rank_key]
         else:
-            g_rank = fetch_single_rank(player, sort_by=score_key, scope="global")
-            
+            g_rank = fetch_single_rank(player, sort_by=score_key, scope="global")     
         c_rank = fetch_single_rank(player, sort_by=score_key, scope="country")
-        
         ranks_result[f"{score_key}_global"] = g_rank
         ranks_result[f"{score_key}_country"] = c_rank
         
@@ -100,40 +98,40 @@ def details(player, ranks):
     print("\n" + "=" * 70)
     print(f"名称: {player.get('name')}")
     print(f"ID: {player.get('id')}")
-    print(f"Discord: {discord.get('username') if discord else 'N/A'}")
+    print(f"Discord: {discord.get('username') if discord else '?'}")
     print(f"国家: {player.get('country')}")
     print()
-    print(f"全球排名 (RankedScore): {ranks.get('rankedScore_global')}")
-    print(f"全球排名 (TotalScoreV2): {ranks.get('totalScoreV2_global')}")
-    print(f"全球排名 (PPScore): {ranks.get('ppScore_global')}")
-    print(f"全球排名 (WFScore): {ranks.get('wfScore_global')}")
-    print(f"全球排名 (WFPPScore): {ranks.get('wfPPScore_global')}")
-    print(f"全球排名 (12KScore): {ranks.get('score12K_global')}")
-    print(f"全球排名 (GeneralScore): {ranks.get('generalScore_global')}")
+    print(f"全球排名 (排位分): {ranks.get('rankedScore_global')}")
+    print(f"全球排名 (总分): {ranks.get('totalScoreV2_global')}")
+    print(f"全球排名 (无暇分): {ranks.get('ppScore_global')}")
+    print(f"全球排名 (首通分): {ranks.get('wfScore_global')}")
+    print(f"全球排名 (首杀分): {ranks.get('wfPPScore_global')}")
+    print(f"全球排名 (12K分): {ranks.get('score12K_global')}")
+    print(f"全球排名 (全局分): {ranks.get('generalScore_global')}")
     print()
-    print(f"国家排名 (RankedScore): {ranks.get('rankedScore_country')}")
-    print(f"国家排名 (TotalScoreV2): {ranks.get('totalScoreV2_country')}")
-    print(f"国家排名 (PPScore): {ranks.get('ppScore_country')}")
-    print(f"国家排名 (WFScore): {ranks.get('wfScore_country')}")
-    print(f"国家排名 (WFPPScore): {ranks.get('wfPPScore_country')}")
-    print(f"国家排名 (12KScore): {ranks.get('score12K_country')}")
-    print(f"国家排名 (GeneralScore): {ranks.get('generalScore_country')}")
+    print(f"国家排名 (排位分): {ranks.get('rankedScore_country')}")
+    print(f"国家排名 (总分): {ranks.get('totalScoreV2_country')}")
+    print(f"国家排名 (无暇分): {ranks.get('ppScore_country')}")
+    print(f"国家排名 (首通分): {ranks.get('wfScore_country')}")
+    print(f"国家排名 (首杀分): {ranks.get('wfPPScore_country')}")
+    print(f"国家排名 (12K分): {ranks.get('score12K_country')}")
+    print(f"国家排名 (全局分): {ranks.get('generalScore_country')}")
     print()
     print(f"排位分: {player.get('rankedScore')}")
     print(f"全局分: {player.get('generalScore')}")
     print(f"总分: {player.get('totalScoreV2')}")
-    print(f"PP分: {player.get('ppScore')}")
-    print(f"WF分: {player.get('wfScore')}")
-    print(f"WFPP分: {player.get('wfPPScore')}")
+    print(f"无暇分: {player.get('ppScore')}")
+    print(f"首通分: {player.get('wfScore')}")
+    print(f"首杀分: {player.get('wfPPScore')}")
     print(f"12K分: {player.get('score12K')}")
     print()
     xacc = player.get('averageXacc')
-    xacc_str = f"{xacc * 100}%" if xacc is not None else "N/A"
+    xacc_str = f"{xacc * 100}%" if xacc is not None else "?"
     print(f"平均XACC: {xacc_str}")
     print(f"U级通关数: {player.get('universalPassCount')}")
     print(f"总通关数: {player.get('totalPasses')}")
     print(f"世界首通数: {player.get('worldsFirstCount')}")
-    print(f"WFPP数: {player.get('worldsFirstPPCount')}")
+    print(f"世界首杀数: {player.get('worldsFirstPPCount')}")
     if td: 
         print(f"最高通关难度: {td.get('name')} ({td.get('sortOrder')})")
 
@@ -172,8 +170,8 @@ def run(player):
 def main():
     global PROXIES
 
-    parser = argparse.ArgumentParser(description="TUF 玩家数据查询脚本")
-    parser.add_argument("--proxy", type=str)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--proxy", type=str, help="http proxy URL")
     args = parser.parse_args()
     if args.proxy:
         PROXIES = {
@@ -182,6 +180,7 @@ def main():
         }
 
     print("=== TUF 玩家查询 ===")
+    print("Github: github.com/sleepingcui/tufplayerlookup TUF: tuforums.com")
     while True:
         print("\n选择搜索类型")
         print("1. 名称")
