@@ -2,7 +2,7 @@ name: build
 on:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   build-and-release:
@@ -41,8 +41,7 @@ jobs:
 
     - name: Build with Nuitka
       run: |
-        python -m nuitka --onefile --main="lookup.py"
-
+        python -m nuitka --onefile --assume-yes-for-downloads --main="lookup.py"
     - name: Create Release
       id: create_release
       uses: softprops/action-gh-release@v2

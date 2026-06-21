@@ -1,0 +1,4 @@
+requests
+nuitka
+wheel
+ziglang
