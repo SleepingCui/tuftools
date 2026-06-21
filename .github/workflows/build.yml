@@ -1,0 +1,57 @@
+name: build
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13' 
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests nuitka wheel ziglang
+    - name: Set up MSVC 
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Generate Version and Release Tag
+      id: meta
+      shell: bash
+      run: |
+        BUILD_TIME=$(date +'%Y%m%d-%H%M%S')
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        TAG_NAME="${BUILD_TIME}-${SHORT_SHA}"
+        echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
+        echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+        PREV_SHA=$(git rev-list --tags --max-count=1 2>/dev/null || git rev-list --max-parents=0 HEAD | head -n 1)
+        echo "PREV_SHA=${PREV_SHA}" >> $GITHUB_ENV
+
+    - name: Build with Nuitka
+      run: |
+        python -m nuitka --onefile --main="lookup.py"
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.meta.outputs.tag }}
+        name: Release ${{ steps.meta.outputs.tag }}
+        body: |
+          Full Changelog: https://github.com/${{ github.repository }}/compare/${{ env.PREV_SHA }}...${{ env.SHORT_SHA }}
+        files: |
+          lookup.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
