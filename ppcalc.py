@@ -13,21 +13,21 @@ def calculate_rank_changes(calculated_score: float):
     
     player = None
     if p_mode == "1":
-        name = input("玩家名：").strip()
+        name = input("玩家名:").strip()
         results = info.search(name)
         if not results:
-            print("未找到玩家。")
+            print("未找到玩家")
             return
         player = info.choose_player(results)
     elif p_mode == "2":
-        pid = input("玩家 ID：").strip()
+        pid = input("ID:").strip()
         try:
             player = info.get_player(pid)
         except:
-            print("未找到该 ID 对应的玩家。")
+            print("未找到玩家")
             return
     else:
-        print("无效选择。")
+        print("无效选择")
         return
 
     if player and ("rankedScoreRank" not in player or "rankedScore" not in player):
@@ -73,9 +73,9 @@ def calculate_rank_changes(calculated_score: float):
 def handle_pp_calc():
     calculator = TUFScoreCalculator()
     
-    level_id = input("\n请输入关卡ID (levelId): ").strip()
+    level_id = input("\n关卡ID: ").strip()
     if not level_id.isdigit():
-        print("错误: 请输入有效的数字ID")
+        print("错误: 请输入有效的ID")
         return
     level_id = int(level_id)
     
@@ -93,12 +93,12 @@ def handle_pp_calc():
         print(f"获取失败: {e}")
         return
     
-    print("\n请输入判定统计 (按顺序):")
+    print("\n输入判定:")
     print("格式: miss early EPerfect perfect LPerfect late")
     
     judgement_input = input("\n判定数据: ").strip().split()
     if len(judgement_input) != 6:
-        print("错误: 需要输入6个数字")
+        print("错误: 需要输入6个值")
         return
     
     try:

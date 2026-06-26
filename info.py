@@ -99,13 +99,13 @@ def details(player, ranks):
 def choose_player(results):
     if len(results) == 1: return results[0]
 
-    print("\n找到多个玩家：\n")
+    print("\n找到多个玩家:\n")
     for idx, player in enumerate(results, start=1):
         print(f"[{idx}] {player['name']} (ID={player['id']}, Country={player['country']}, RankedScore={player['rankedScore']:.2f})")
 
     while True:
         try:
-            choice = int(input("\n选择玩家： "))
+            choice = int(input("\n选择玩家: "))
             if 1 <= choice <= len(results):
                 return results[choice - 1]
         except:
@@ -133,34 +133,35 @@ def handle_player_lookup():
         player = None
 
         if mode == "1":
-            name = input("玩家名：").strip()
+            name = input("玩家名:").strip()
             results = search(name)
             if not results:
-                print("未找到玩家。")
+                print("未找到玩家")
                 stats()
                 continue
             player = choose_player(results)
             run(player)
 
         elif mode == "2":
-            username = input("Discord 用户名：").strip()
+            username = input("Discord 用户名:").strip()
             results = search(f"@{username}")
             if not results:
-                print("未找到玩家。")
+                print("未找到玩家")
                 stats()
                 continue
             player = choose_player(results)
             run(player)
 
         elif mode == "3":
-            pid = input("玩家 ID：").strip()
+            pid = input("玩家 ID:" \
+            "").strip()
             try:
                 player = get_player(pid)
             except:
                 player = None
 
             if not player:
-                print("未找到玩家。")
+                print("未找到玩家")
                 stats()
                 continue
             run(player)
@@ -168,4 +169,4 @@ def handle_player_lookup():
         elif mode == "b":
             break
         else:
-            print("搜索类型无效。")
+            print("搜索类型无效")
