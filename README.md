@@ -1,20 +1,16 @@
-# TUF Player Lookup
+# TUF Tools
 
-一个简易的用于查询 TUF 玩家信息的命令行工具
+一个查询 TUF 信息的小工具
 
 支持：
 
-- 按玩家名查询
-- 按 dc 用户名查询
-- 按 id 查询
-- 显示全球排名
-- 统计国家排名
-- 显示 Ranked Score、PP、WF、12K 等数据
+- 查询玩家信息，排名，国家排名
+- PP分计算并给出排名变化
 
 ## 安装&使用
 
 ```bash
-pip install requests & python lookup.py
+pip install requests & python main.py
 ```
 
 ## 来源
