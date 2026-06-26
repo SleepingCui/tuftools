@@ -44,8 +44,11 @@ def calculate_rank_changes(calculated_score: float):
         old_global_rank = player["rankedScoreRank"]
     else:
         old_global_rank = info.fetch_single_rank(player, "rankedScore", "global")
+
+    if old_global_rank == 0: old_global_rank = 1
         
     old_country_rank = info.fetch_single_rank(player, "rankedScore", "country")
+    if old_country_rank == 0: old_country_rank = 1
     
     future_player = {
         "country": player.get("country"),
@@ -53,17 +56,20 @@ def calculate_rank_changes(calculated_score: float):
     }
     
     new_global_rank = info.fetch_single_rank(future_player, "rankedScore", "global")
+    if new_global_rank == 0: new_global_rank = 1
+    
     new_country_rank = info.fetch_single_rank(future_player, "rankedScore", "country")
+    if new_country_rank == 0: new_country_rank = 1
     
     def rank_delta(old_rank, new_rank):
         try:
-            return f"+{int(old_rank) - int(new_rank)}"
+            delta = int(old_rank) - int(new_rank)
+            return f"+{delta}" if delta >= 0 else f"{delta}"
         except (TypeError, ValueError):
             return "N/A"
 
     global_delta = rank_delta(old_global_rank, new_global_rank)
     country_delta = rank_delta(old_country_rank, new_country_rank)
-
 
     print(f"玩家: {player.get('name')} (ID: {player.get('id')})")
     print(f"排位分数: {old_score:.2f} -> {new_score:.2f} (+{calculated_score:.2f})")
