@@ -153,8 +153,7 @@ def handle_player_lookup():
             run(player)
 
         elif mode == "3":
-            pid = input("玩家 ID:" \
-            "").strip()
+            pid = input("玩家 ID:").strip()
             try:
                 player = get_player(pid)
             except:

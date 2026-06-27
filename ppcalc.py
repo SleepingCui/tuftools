@@ -88,25 +88,18 @@ def handle_pp_calc():
             except Exception as e:
                 print(f"更新失败: {e}")
     else:
-        print("首次运行，正在下载难度数据库...")
+        print("下载难度数据库...")
         try:
             diffman.update()
-            print("下载完成。")
+            print("下载完成")
         except Exception as e:
             print(f"下载失败: {e}")
             return
             
-        print("\n请输入谱面信息：")
-
     difficulty = input("难度: ").strip().upper()
-
-
     marathon = input("是否Marathon(y/N): ").strip().lower() == "y"
 
-    level_data = calculator.build_level_data(
-        difficulty_name=difficulty,
-        marathon=marathon
-    )
+    level_data = calculator.build_level_data(difficulty_name=difficulty,marathon=marathon)
         
     accuracy = float(input("XACC: ").strip())
 
@@ -117,8 +110,6 @@ def handle_pp_calc():
     speed = float(speed_input) if speed_input else 1.0
     
     no_hold = input("是否禁用Hold+Tap? (y/N): ").strip().lower() == 'y'
-    
-    print("正在计算...")
     
     result = calculator.calculate_score(level_data, accuracy, misses, speed, no_hold)
     
