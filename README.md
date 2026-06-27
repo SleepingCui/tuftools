@@ -6,6 +6,7 @@
 
 - 查询玩家信息，排名，国家排名
 - PP分计算并给出排名变化
+- 计算X-ACC
 
 ## 安装&使用
 
@@ -15,7 +16,7 @@ pip install requests & python main.py
 
 ## 来源
 
-https://tuforums.com/
+[TUF](https://tuforums.com/)
 
-https://api.tuforums.com/
+[TUF API](https://api.tuforums.com/)
 

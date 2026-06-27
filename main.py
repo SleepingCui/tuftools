@@ -1,8 +1,8 @@
 import argparse
-import sys
 from api import set_proxies
 from info import handle_player_lookup
 from ppcalc import handle_pp_calc
+from acccalc import handle_acc_calc
 
 def main():
     parser = argparse.ArgumentParser()
@@ -18,6 +18,7 @@ def main():
         print("\n选择功能系统")
         print("1. 玩家数据查询")
         print("2. PP计算器")
+        print("3. X-ACC计算器")
         print("q. 退出")
 
         choice = input("\n> ").strip()
@@ -26,6 +27,8 @@ def main():
             handle_player_lookup()
         elif choice == "2":
             handle_pp_calc()
+        elif choice == "3":
+            handle_acc_calc()
         elif choice == "q":
             print("exit")
             break

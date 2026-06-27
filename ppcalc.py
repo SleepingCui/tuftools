@@ -1,9 +1,8 @@
-
-from api import stats
 from tools.TUFScoreCalculator import TUFScoreCalculator
+from tools.DiffMan import DifficultyManager
+from api import stats
 import info
-
-
+import os
 
 def calculate_rank_changes(calculated_score: float):
     print("选择查找玩家的方式:")
@@ -78,60 +77,59 @@ def calculate_rank_changes(calculated_score: float):
 
 def handle_pp_calc():
     calculator = TUFScoreCalculator()
-    
-    level_id = input("\n关卡ID: ").strip()
-    if not level_id.isdigit():
-        print("错误: 请输入有效的ID")
-        return
-    level_id = int(level_id)
-    
-    print(f"\n正在获取关卡 {level_id} 的数据...")
-    try:
-        level_data = calculator.get_level_data(level_id)
-        level = level_data.get("level", {})
-        print(f"歌曲: {level.get('song', 'Unknown')}")
-        print(f"艺术家: {level.get('artist', 'Unknown')}")
-        print(f"难度: {level.get('difficulty', {}).get('name', 'Unknown')}")
-        print(f"物量: {level.get('tilecount', 0)}")
-        print(f"基础PP分: {level.get('ppBaseScore', 'N/A')}")
-        print(f"基础分: {level.get('baseScore', 'N/A')}")
-    except Exception as e:
-        print(f"获取失败: {e}")
-        return
-    
-    print("\n输入判定:")
-    print("格式: miss early EPerfect perfect LPerfect late")
-    
-    judgement_input = input("\n判定数据: ").strip().split()
-    if len(judgement_input) != 6:
-        print("错误: 需要输入6个值")
-        return
-    
-    try:
-        judgements = [int(x) for x in judgement_input]
-    except ValueError:
-        print("错误: 请输入有效的数字")
-        return
-    
-    speed_input = input("\n速度倍率 (默认1.0): ").strip()
+    diffman = DifficultyManager()
+
+    if os.path.exists("difficulties.json"):
+        update = input("是否更新难度数据库? (y/N): ").strip().lower()
+        if update == "y":
+            try:
+                diffman.update()
+                print("难度数据库更新完成。")
+            except Exception as e:
+                print(f"更新失败: {e}")
+    else:
+        print("首次运行，正在下载难度数据库...")
+        try:
+            diffman.update()
+            print("下载完成。")
+        except Exception as e:
+            print(f"下载失败: {e}")
+            return
+            
+        print("\n请输入谱面信息：")
+
+    difficulty = input("难度: ").strip().upper()
+
+
+    marathon = input("是否Marathon(y/N): ").strip().lower() == "y"
+
+    level_data = calculator.build_level_data(
+        difficulty_name=difficulty,
+        marathon=marathon
+    )
+        
+    accuracy = float(input("XACC: ").strip())
+
+    misses_input = input("Miss 数(默认0): ").strip()
+    misses = int(misses_input) if misses_input else 0
+        
+    speed_input = input("速度倍率 (默认1.0): ").strip()
     speed = float(speed_input) if speed_input else 1.0
     
-    no_hold = input("\n是否禁用Hold+Tap? (y/n, 默认n): ").strip().lower() == 'y'
+    no_hold = input("是否禁用Hold+Tap? (y/N): ").strip().lower() == 'y'
     
     print("正在计算...")
     
-    result = calculator.calculate_score(level_data, judgements, speed, no_hold)
+    result = calculator.calculate_score(level_data, accuracy, misses, speed, no_hold)
     
     print(f"XACC: {result['accuracy_pct']}%")
     print(f"基础分: {result['base_score']} ({result['base_source']})")
     print(f"分数倍率: {result['multiplier']}x")
     print(f"速度修正: {result['speed_mod']}x")
     print(f"PP分: {result['score']}")
-    
-    for key, value in result['judgements'].items():
-        print(f"{key}: {value}")
+
         
-    calc_rank = input("\n是否计算排名变化? (y/n, 默认n): ").strip().lower()
+    calc_rank = input("\n是否计算排名变化? (y/N): ").strip().lower()
     if calc_rank == 'y':
         calculate_rank_changes(result['score'])
         
