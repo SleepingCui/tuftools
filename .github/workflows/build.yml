@@ -23,7 +23,7 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests nuitka wheel ziglang
+        pip install -r requirements.txt
     - name: Set up MSVC 
       uses: ilammy/msvc-dev-cmd@v1
 
