@@ -11,7 +11,7 @@
 ## 安装&使用
 
 ```bash
-pip install requests & python main.py
+pip install -r requests & python main.py
 ```
 
 ## 来源
