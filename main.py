@@ -18,7 +18,7 @@ def main():
         print("\n选择功能系统")
         print("1. 玩家数据查询")
         print("2. PP计算器")
-        print("3. X-ACC计算器")
+        print("3. XACC计算器")
         print("q. 退出")
 
         choice = input("\n> ").strip()

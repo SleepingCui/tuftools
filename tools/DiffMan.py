@@ -5,7 +5,7 @@ from api import fetchapi, BASE_URL
 
 
 class DifficultyManager:
-    FILE = "difficulties.json"
+    file = "difficulties.json"
 
     def __init__(self):
         self.difficulties = self.load()
@@ -21,18 +21,18 @@ class DifficultyManager:
             for item in raw
         ]
 
-        with open(self.FILE, "w", encoding="utf-8") as f:
+        with open(self.file, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
         self.difficulties = result
         return result
 
     def load(self):
-        if not os.path.exists(self.FILE):
+        if not os.path.exists(self.file):
             print("下载难度数据...")
             return self.update()
 
-        with open(self.FILE, "r", encoding="utf-8") as f:
+        with open(self.file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def get_base_score(self, difficulty_name):
