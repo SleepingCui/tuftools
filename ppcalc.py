@@ -103,7 +103,7 @@ def handle_pp_calc():
         
     accuracy = float(input("XACC: ").strip())
 
-    misses_input = input("Miss 数(默认0): ").strip()
+    misses_input = input("Too Early 数(默认0): ").strip()
     misses = int(misses_input) if misses_input else 0
         
     speed_input = input("速度倍率 (默认1.0): ").strip()

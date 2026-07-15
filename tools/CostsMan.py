@@ -8,8 +8,8 @@ DF_JD_COSTS = {
     "tooEarly": 1.5,   
     "early": 50.0,
     "late": 50.0,
-    "ePerfect": 100.0,
-    "lPerfect": 100.0,
+    "ePerfect": 50.0,
+    "lPerfect": 50.0,
 }
 
 file = "costs.json"

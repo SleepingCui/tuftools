@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 from tools.XACCTools import calc, reverse, JD_WEIGHTS
 from tools.CostsMan import load, save
+import time
 def run1():
     print("输入格式: failMiss tooEarly early EPerfect perfect LPerfect late")
 
@@ -41,10 +42,13 @@ def run2():
             except ValueError:
                 print(f"已跳过固定 {k}")
 
+    print("正在计算...这可能需要一些时间")
+    t_start = time.perf_counter()
     result = reverse(target_acc, total, fixed_counts)
+    t_end = time.perf_counter()
+    elapsed = (t_end - t_start) * 1000
 
     print()
-
     if result is None:
         print("无法达成该目标 XACC")
     else:
@@ -52,10 +56,9 @@ def run2():
             status = "(Locked)" if k in fixed_counts else ""
             print(f" {k:<10}: {result[k]} {status}")
         
-        weighted_sum = sum(result[k] * JD_WEIGHTS[k] for k in keys)
-        calc_acc = (weighted_sum / total) * 100
-        print(f"\n XACC: {calc_acc}%")
-
+        actual_acc = (sum(result[k] * JD_WEIGHTS[k] for k in keys) / total) * 100
+        print(f"\n XACC: {actual_acc}%")
+    print(f" Elapsed {elapsed} ms")
 
 def run3():
     current_costs = load()
