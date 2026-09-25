@@ -12,7 +12,7 @@
 ## 安装&使用
 
 ```bash
-pip install requests & python main.py
+pip install -r requirements.txt && python main.py
 ```
 
 ## 来源

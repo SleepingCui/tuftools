@@ -10,6 +10,11 @@ class DifficultyManager:
     def __init__(self):
         self.difficulties = self.load()
 
+    @classmethod
+    def has_cache(cls):
+        """本地是否已有难度数据。调用方据此决定要不要显示下载提示。"""
+        return os.path.exists(cls.file)
+
     def update(self):
         raw = fetchapi(f"{BASE_URL}/v2/database/difficulties")
 
@@ -29,11 +34,13 @@ class DifficultyManager:
 
     def load(self):
         if not os.path.exists(self.file):
-            print("下载难度数据...")
             return self.update()
 
         with open(self.file, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    def difficulty_names(self):
+        return [item["name"] for item in self.difficulties]
 
     def get_base_score(self, difficulty_name):
         difficulty_name = difficulty_name.upper()

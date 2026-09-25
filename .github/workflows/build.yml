@@ -41,7 +41,7 @@ jobs:
 
     - name: Build with Nuitka
       run: |
-        python -m nuitka --onefile --assume-yes-for-downloads --output-filename=tuftools.exe main.py
+        python -m nuitka --onefile --assume-yes-for-downloads --output-filename=tuftools.exe --include-package=rich._unicode_data main.py
     - name: Create Release
       id: create_release
       uses: softprops/action-gh-release@v2
