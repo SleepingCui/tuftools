@@ -3,6 +3,13 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: '选择要构建的分支'
+        required: true
+        default: 'main'
+        type: string
 
 jobs:
   build-and-release:
@@ -12,6 +19,7 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
+        ref: ${{ github.event.inputs.branch || github.ref }}
         fetch-depth: 0 
 
     - name: Set up Python
