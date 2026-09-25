@@ -98,12 +98,14 @@ def handle_pp_calc():
             
     difficulty = input("难度: ").strip().upper()
     marathon = input("是否Marathon(y/N): ").strip().lower() == "y"
+    tilecount_input = input("关卡砖块数 t (默认0): ").strip()
+    tilecount = int(tilecount_input) if tilecount_input else 0
 
-    level_data = calculator.build_level_data(difficulty_name=difficulty,marathon=marathon)
+    level_data = calculator.build_level_data(difficulty_name=difficulty, marathon=marathon, tilecount=tilecount)
         
     accuracy = float(input("XACC: ").strip())
 
-    misses_input = input("Too Early 数(默认0): ").strip()
+    misses_input = input("空敲数 m (默认0): ").strip()
     misses = int(misses_input) if misses_input else 0
         
     speed_input = input("速度倍率 (默认1.0): ").strip()
@@ -118,6 +120,7 @@ def handle_pp_calc():
     print(f"基础分: {result['base_score']}")
     print(f"分数倍率: {result['multiplier']}x")
     print(f"速度修正: {result['speed_mod']}x")
+    print(f"空敲修正: {result['empty_tap_mod']}x")
     print(f"PP分: {result['score']}")
 
         
