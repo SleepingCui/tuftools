@@ -19,5 +19,5 @@ pip install requests & python main.py
 
 [TUF](https://tuforums.com/)
 
-[TUF API](https://api.tuforums.com/)
+[TUF API](https://api.tuforums.com/docs/)
 
