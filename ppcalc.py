@@ -119,7 +119,7 @@ def handle_pp_calc():
         return
 
     marathon = input("是否Marathon(y/N): ").strip().lower() == "y"
-    tilecount_input = input("关卡砖块数 t (默认0): ").strip()
+    tilecount_input = input("关卡砖块数 (默认0): ").strip()
     tilecount = int(tilecount_input) if tilecount_input else 0
 
     try:
@@ -130,7 +130,7 @@ def handle_pp_calc():
 
     accuracy = float(input("XACC: ").strip())
 
-    misses_input = input("空敲数 m (默认0): ").strip()
+    misses_input = input("空敲数 (默认0): ").strip()
     misses = int(misses_input) if misses_input else 0
         
     speed_input = input("速度倍率 (默认1.0): ").strip()

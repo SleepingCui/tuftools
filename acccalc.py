@@ -17,8 +17,6 @@ def run1():
     except ValueError:
         print("请输入整数")
         return
-    log(f"[XACC/calc] judgements={dict(zip(JD_WEIGHTS, judgements))}")
-    log(f"[XACC/calc] weighted_parts={[judgements[i] * JD_WEIGHTS[k] for i, k in enumerate(JD_WEIGHTS)]}")
     print()
     print(f"XACC: {calc(judgements) * 100}%")
 

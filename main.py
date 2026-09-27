@@ -7,7 +7,7 @@ from acccalc import handle_acc_calc
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proxy", type=str, help="http proxy URL")
-    parser.add_argument("--verbose", "-v", action="store_true", help="显示请求URL与请求统计信息")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     args = parser.parse_args()
     if args.proxy:
         set_proxies(args.proxy)

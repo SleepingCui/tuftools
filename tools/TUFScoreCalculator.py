@@ -12,7 +12,6 @@ class TUFScoreCalculator:
         self.difficulties = self.diffman.load()
 
     def build_level_data(self, difficulty_name: str = "", marathon: bool = False, tilecount: int = 0, base_score: float = None):
-        """base_score 不为 None 时直接使用该值，忽略 difficulty_name 的难度查询。"""
         difficulty_name = difficulty_name.upper() if difficulty_name else ""
 
         if base_score is None:
@@ -91,37 +90,7 @@ class TUFScoreCalculator:
             return 0.5 + 0.2 * ((50 - adjusted_empty_taps) / 24.5) ** 0.7
         return 0.5
     
-    # def calculate_score(self, level_data: Dict, judgements: List[int], speed: float = 1.0, is_no_hold_tap: bool = False) -> Dict:
-    #     level = level_data.get("level", level_data)
-    #     difficulty = level.get("difficulty", {})
-        
-    #     accuracy = self.calculate_accuracy(judgements)
-    #     accuracy_pct = accuracy * 100
-        
-    #     base_score, base_source = self.get_base_score(level_data, accuracy)
-    #     xacc_curve = self.get_xacc_curve(level_data)
-    #     multiplier = self.calculate_score_multiplier(accuracy, base_score, xacc_curve)
-        
-    #     is_marathon = difficulty.get("name") == "Marathon"
-    #     speed_mod = self.calculate_speed_modifier(speed, is_marathon)
-        
-    #     final_score = max(0, base_score * multiplier * speed_mod)
-    #     if is_no_hold_tap: final_score *= 0.95
-        
-    #     return {
-    #         "accuracy": accuracy,
-    #         "accuracy_pct": round(accuracy_pct, 2),
-    #         "score": final_score,
-    #         "base_score": base_score,
-    #         "base_source": base_source,
-    #         "multiplier": round(multiplier, 4),
-    #         "speed_mod": round(speed_mod, 4),
-    #         "xacc_curve": xacc_curve,
-    #         "judgements": {
-    #             "miss": judgements[0], "early": judgements[1], "ePerfect": judgements[2],
-    #             "perfect": judgements[3], "lPerfect": judgements[4], "late": judgements[5]
-    #         }
-    #     }
+    
     def calculate_score(self, level_data: Dict, accuracy_pct: float, misses: int = 1, speed: float = 1.0, is_no_hold_tap: bool = False) -> Dict:
         level = level_data.get("level", level_data)
         difficulty = level.get("difficulty", {})

@@ -22,10 +22,10 @@ def reverse(target_acc: float, total: int, fixed_counts: Dict[str, int]) -> Opti
     eps = 1e-9
 
     def fail(reason: str) -> Optional[Dict[str, int]]:
-        log(f"[XACC/reverse] 无解: {reason}")
+        log(f"[XACCreverse] 无解: {reason}")
         return None
 
-    log(f"[XACC/reverse] 开始: target={target_acc:.6f}%, total={total}, fixed={fixed_counts}")
+    log(f"[XACCreverse] 开始: target={target_acc:.6f}%, total={total}, fixed={fixed_counts}")
 
     if total < 0 or not 0.0 <= target_acc <= 100.0:
         return fail("total 或 target_acc 超出范围")
@@ -53,14 +53,14 @@ def reverse(target_acc: float, total: int, fixed_counts: Dict[str, int]) -> Opti
     min_score = (target_acc - tolerant_percent) / 100.0 * total
     max_score = (target_acc + tolerant_percent) / 100.0 * total
     log(
-        f"[XACC/reverse] fixed_score={fixed_score_units / 20:.4f}, "
+        f"[XACCreverse] fixed_score={fixed_score_units / 20:.4f}, "
         f"remaining={rem_notes}, target_range=[{min_score:.6f}, {max_score:.6f}]"
     )
 
     if not rem_notes:
         actual = fixed_score_units / 20.0
         if min_score - eps <= actual <= max_score + eps:
-            log(f"[XACC/reverse] 固定判定已满足目标: score={actual:.6f}")
+            log(f"[XACCreverse] 固定判定已满足目标: score={actual:.6f}")
             return result
         return fail(f"固定判定分数 {actual:.6f} 不在目标区间")
 
@@ -76,34 +76,44 @@ def reverse(target_acc: float, total: int, fixed_counts: Dict[str, int]) -> Opti
     loss_max = math.floor((base_score_units / 20.0 - min_score) * 20.0 + eps)
     loss_min = max(0, loss_min)
     log(
-        f"[XACC/reverse] base={base_key}, base_score={base_score_units / 20:.4f}, "
+        f"[XACCreverse] base={base_key}, base_score={base_score_units / 20:.4f}, "
         f"loss_range=[{loss_min}, {loss_max}] (单位=0.05)"
     )
     if loss_min > loss_max:
         return fail("最高可达分数也低于目标区间")
 
-    loss_items = [
-        (k, max_weight - weight_units[k], costs_dict[k] - base_cost)
-        for k in free_keys
-        if weight_units[k] < max_weight
-    ]
-    log(f"[XACC/reverse] loss_items={[(k, loss, cost) for k, loss, cost in loss_items]}")
+    # 相同 loss 的判定完全等价，只保留成本最低的一个，减少状态数。
+    loss_item_map = {}
+    for k in free_keys:
+        item_loss = max_weight - weight_units[k]
+        if item_loss <= 0:
+            continue
+        item_cost = costs_dict[k] - base_cost
+        old = loss_item_map.get(item_loss)
+        if old is None or item_cost < old[1]:
+            loss_item_map[item_loss] = (k, item_cost)
+    loss_items = [(k, item_loss, item_cost)
+                  for item_loss, (k, item_cost) in sorted(loss_item_map.items())]
+    log(f"[XACCreverse] loss_items={[(k, loss, cost) for k, loss, cost in loss_items]}")
     if not loss_items:
         if loss_min <= 0 <= loss_max:
             result[base_key] += rem_notes
-            log(f"[XACC/reverse] 无需替换，全部使用 {base_key}")
+            log(f"[XACCreverse] 无需替换，全部使用 {base_key}")
             return result
         return fail("没有可用于降低分数的判定")
 
-    # states[count][loss] = (额外成本, 各替代判定数量)
-    # count 是替换 base_key 的数量，保证不会使用超过剩余物量
-    states = [dict() for _ in range(rem_notes + 1)]
-    states[0][0] = (0.0, (0,) * len(loss_items))
+    # 使用滚动层，避免保存 rem_notes 个字典。
+    current = {0: (0.0, (0,) * len(loss_items))}
+    best = None
+    if loss_min <= 0 <= loss_max:
+        best = (fixed_cost + rem_notes * base_cost, 0, 0,
+                (0,) * len(loss_items))
     progress_step = max(1, rem_notes // 10)
     for count in range(rem_notes):
-        if not states[count]:
+        if not current:
             continue
-        for loss, (cost, layout) in states[count].items():
+        next_states = {}
+        for loss, (cost, layout) in current.items():
             for i, (_, item_loss, item_cost) in enumerate(loss_items):
                 new_loss = loss + item_loss
                 if new_loss > loss_max:
@@ -112,22 +122,21 @@ def reverse(target_acc: float, total: int, fixed_counts: Dict[str, int]) -> Opti
                 new_layout[i] += 1
                 new_layout = tuple(new_layout)
                 new_cost = cost + item_cost
-                old = states[count + 1].get(new_loss)
+                old = next_states.get(new_loss)
                 if old is None or new_cost < old[0] - eps:
-                    states[count + 1][new_loss] = (new_cost, new_layout)
-        if (count + 1) % progress_step == 0 or count + 1 == rem_notes:
-            state_count = sum(len(layer) for layer in states[:count + 2])
-            log(f"[XACC/reverse] DP {count + 1}/{rem_notes}, states={state_count}")
+                    next_states[new_loss] = (new_cost, new_layout)
+        current = next_states
 
-    best = None
-    for count in range(rem_notes + 1):
-        for loss, (extra_cost, layout) in states[count].items():
+        for loss, (extra_cost, layout) in current.items():
             if loss_min <= loss <= loss_max:
-                candidate = (fixed_cost + (rem_notes - count) * base_cost + sum(
+                candidate = (fixed_cost + (rem_notes - count - 1) * base_cost + sum(
                     n * costs_dict[loss_items[i][0]] for i, n in enumerate(layout)
-                ), count, loss, layout)
+                ), count + 1, loss, layout)
                 if best is None or candidate[0] < best[0] - eps:
                     best = candidate
+
+        if (count + 1) % progress_step == 0 or count + 1 == rem_notes:
+            log(f"[XACCreverse] DP {count + 1}/{rem_notes}, states={len(current)}")
 
     if best is None:
         return fail("DP 没有找到落在目标区间内的分数损失")
@@ -138,7 +147,7 @@ def reverse(target_acc: float, total: int, fixed_counts: Dict[str, int]) -> Opti
     result[base_key] += rem_notes - used
     final_score = sum(result[k] * JD_WEIGHTS[k] for k in keys)
     log(
-        f"[XACC/reverse] 完成: loss={best[2]}, used_replacements={used}, "
+        f"[XACCreverse] 完成: loss={best[2]}, used_replacements={used}, "
         f"score={final_score:.6f}, cost={best[0]:.6f}, result={result}"
     )
     return result
