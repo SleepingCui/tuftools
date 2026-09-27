@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 from tools.XACCTools import calc, reverse, JD_WEIGHTS
 from tools.CostsMan import load, save
+from api import log
 import time
 def run1():
     print("输入格式: failMiss tooEarly early EPerfect perfect LPerfect late")
@@ -16,6 +17,8 @@ def run1():
     except ValueError:
         print("请输入整数")
         return
+    log(f"[XACC/calc] judgements={dict(zip(JD_WEIGHTS, judgements))}")
+    log(f"[XACC/calc] weighted_parts={[judgements[i] * JD_WEIGHTS[k] for i, k in enumerate(JD_WEIGHTS)]}")
     print()
     print(f"XACC: {calc(judgements) * 100}%")
 
