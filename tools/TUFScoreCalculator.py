@@ -12,8 +12,16 @@ class TUFScoreCalculator:
         self.diffman = DifficultyManager()
         self.difficulties = self.diffman.load()
 
-    def build_level_data(self, difficulty_name: str, marathon: bool = False, tilecount: int = 0):
-        difficulty_name = difficulty_name.upper()
+    def build_level_data(self, difficulty_name: str = "", marathon: bool = False, tilecount: int = 0, base_score: float = None):
+        """base_score 不为 None 时直接使用该值，忽略 difficulty_name 的难度查询。"""
+        difficulty_name = difficulty_name.upper() if difficulty_name else ""
+
+        if base_score is None:
+            diff_base = self.diffman.get_base_score(difficulty_name)
+            level_base = 0
+        else:
+            diff_base = base_score
+            level_base = base_score
 
         return {
             "level": {
@@ -21,10 +29,10 @@ class TUFScoreCalculator:
                 "artist": "",
                 "tilecount": tilecount,
                 "ppBaseScore": 0,
-                "baseScore": 0,
+                "baseScore": level_base,
                 "difficulty": {
-                    "name": "Marathon" if marathon else difficulty_name,
-                    "baseScore": self.diffman.get_base_score(difficulty_name)
+                    "name": "Marathon" if marathon else (difficulty_name or "Custom"),
+                    "baseScore": diff_base
                 },
                 "xaccCurve": None,
                 "xaccCurveMeta": None

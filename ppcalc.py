@@ -96,13 +96,31 @@ def handle_pp_calc():
             print(f"下载失败: {e}")
             return
             
-    difficulty = input("难度: ").strip().upper()
+    print("选择BaseScore来源:")
+    print("1. 按难度等级")
+    print("2. 直接输入BaseScore")
+    base_mode = input("> ").strip()
+
+    difficulty = ""
+    base_score = None
+    if base_mode == "2":
+        base_score = float(input("BaseScore: ").strip())
+    elif base_mode == "1":
+        difficulty = input("难度: ").strip().upper()
+    else:
+        print("无效选择")
+        return
+
     marathon = input("是否Marathon(y/N): ").strip().lower() == "y"
     tilecount_input = input("关卡砖块数 t (默认0): ").strip()
     tilecount = int(tilecount_input) if tilecount_input else 0
 
-    level_data = calculator.build_level_data(difficulty_name=difficulty, marathon=marathon, tilecount=tilecount)
-        
+    try:
+        level_data = calculator.build_level_data(difficulty_name=difficulty, marathon=marathon, tilecount=tilecount, base_score=base_score)
+    except ValueError as e:
+        print(e)
+        return
+
     accuracy = float(input("XACC: ").strip())
 
     misses_input = input("空敲数 m (默认0): ").strip()
