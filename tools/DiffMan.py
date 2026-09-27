@@ -1,7 +1,7 @@
 import json
 import os
 
-from api import fetchapi, BASE_URL
+from api import fetchapi_sync, BASE_URL
 
 
 class DifficultyManager:
@@ -11,7 +11,7 @@ class DifficultyManager:
         self.difficulties = self.load()
 
     def update(self):
-        raw = fetchapi(f"{BASE_URL}/v2/database/difficulties")
+        raw = fetchapi_sync(f"{BASE_URL}/v2/database/difficulties")
 
         result = [
             {

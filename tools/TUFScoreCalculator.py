@@ -1,5 +1,4 @@
 from typing import Dict, Tuple
-from api import fetchapi, BASE_URL
 from tools.DiffMan import DifficultyManager
 
 class TUFScoreCalculator:  

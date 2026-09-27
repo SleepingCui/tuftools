@@ -1,5 +1,5 @@
 import argparse
-from api import set_proxies
+from api import set_proxies, set_verbose
 from info import handle_player_lookup
 from ppcalc import handle_pp_calc
 from acccalc import handle_acc_calc
@@ -7,9 +7,11 @@ from acccalc import handle_acc_calc
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proxy", type=str, help="http proxy URL")
+    parser.add_argument("--verbose", "-v", action="store_true", help="显示请求URL与请求统计信息")
     args = parser.parse_args()
     if args.proxy:
         set_proxies(args.proxy)
+    set_verbose(args.verbose)
 
     print("=== TUF Tools ===")
     print("Github: github.com/sleepingcui/tuftools TUF: tuforums.com")

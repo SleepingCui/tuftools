@@ -39,27 +39,34 @@ def calculate_rank_changes(calculated_score: float):
     old_score = player.get("rankedScore", 0)
     new_score = old_score + calculated_score
     
-    if player.get("rankedScoreRank") is not None:
-        old_global_rank = player["rankedScoreRank"]
-    else:
-        old_global_rank = info.fetch_single_rank(player, "rankedScore", "global")
+    old_global_rank = player.get("rankedScoreRank")
 
-    if old_global_rank == 0: old_global_rank = 1
-        
-    old_country_rank = info.fetch_single_rank(player, "rankedScore", "country")
-    if old_country_rank == 0: old_country_rank = 1
-    
     future_player = {
         "country": player.get("country"),
         "rankedScore": new_score
     }
-    
-    new_global_rank = info.fetch_single_rank(future_player, "rankedScore", "global")
+
+
+    jobs = {
+        "old_country": info.rank_url(player, "rankedScore", "country"),
+        "new_global": info.rank_url(future_player, "rankedScore", "global"),
+        "new_country": info.rank_url(future_player, "rankedScore", "country")
+    }
+    if old_global_rank is None:
+        jobs["old_global"] = info.rank_url(player, "rankedScore", "global")
+
+    ranks = info.fetch_ranks({k: url for k, url in jobs.items() if url})
+
+    if old_global_rank is None: old_global_rank = ranks.get("old_global", "?")
+    old_country_rank = ranks.get("old_country", "?")
+    new_global_rank = ranks.get("new_global", "?")
+    new_country_rank = ranks.get("new_country", "?")
+
+    if old_global_rank == 0: old_global_rank = 1
+    if old_country_rank == 0: old_country_rank = 1
     if new_global_rank == 0: new_global_rank = 1
-    
-    new_country_rank = info.fetch_single_rank(future_player, "rankedScore", "country")
     if new_country_rank == 0: new_country_rank = 1
-    
+
     def rank_delta(old_rank, new_rank):
         try:
             delta = int(old_rank) - int(new_rank)

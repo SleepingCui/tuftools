@@ -1,32 +1,45 @@
-import requests
 import json
-from api import fetchapi, stats, BASE_URL
+from urllib.parse import quote
+
+from api import fetchapi_sync, fetchall_sync, stats, BASE_URL
 
 def search(query):
     url = f"{BASE_URL}/v3/players/search?query={query}"
-    print(url)
-    data = fetchapi(url)
+    data = fetchapi_sync(url)
     return data.get("results", [])
 
 def get_player(pid):
     url = f"{BASE_URL}/v3/players/{pid}"
-    print(url)
-    return fetchapi(url)
+    return fetchapi_sync(url)
 
-def fetch_single_rank(player, sort_by, scope="global"):
+def rank_url(player, sort_by, scope="global"):
+    """构造排名查询URL；分数为空时无需查询，返回 None。"""
     score = player.get(sort_by)
-    if score is None or score == 0: return "?"
+    if score is None or score == 0: return None
 
     filters = {
         sort_by: [score, 999999999]
     }
-    
+
     if scope == "country": filters["country"] = player["country"]
 
-    url = f"{BASE_URL}/v3/players/leaderboard?query=&sortBy={sort_by}&order=desc&offset=0&limit=1&showBanned=hide&filters={requests.utils.quote(json.dumps(filters))}"
-    print(url)
+    return f"{BASE_URL}/v3/players/leaderboard?query=&sortBy={sort_by}&order=desc&offset=0&limit=1&showBanned=hide&filters={quote(json.dumps(filters))}"
+
+def rank_count(response):
+    return response.get("count", "?") if isinstance(response, dict) else "?"
+
+def fetch_ranks(jobs: dict):
+    if not jobs: return {}
+
+    responses = fetchall_sync(list(jobs.values()))
+    return {key: rank_count(resp) for key, resp in zip(jobs.keys(), responses)}
+
+def fetch_single_rank(player, sort_by, scope="global"):
+    url = rank_url(player, sort_by, scope)
+    if url is None: return "?"
+
     try:
-        return fetchapi(url).get("count", "?")
+        return rank_count(fetchapi_sync(url))
     except:
         return "?"
 
@@ -40,18 +53,24 @@ def get_all_ranks(player):
         "score12K": "score12KRank",
         "generalScore": "generalScoreRank"
     }
-    
+
     ranks_result = {}
-    
+    jobs = {}
+
     for score_key, rank_key in metrics.items():
-        if rank_key in player and player[rank_key] is not None:
-            g_rank = player[rank_key]
+        g_rank = player.get(rank_key)
+        if g_rank is not None:
+            ranks_result[f"{score_key}_global"] = g_rank
         else:
-            g_rank = fetch_single_rank(player, sort_by=score_key, scope="global")     
-        c_rank = fetch_single_rank(player, sort_by=score_key, scope="country")
-        ranks_result[f"{score_key}_global"] = g_rank
-        ranks_result[f"{score_key}_country"] = c_rank
-        
+            url = rank_url(player, sort_by=score_key, scope="global")
+            if url: jobs[f"{score_key}_global"] = url
+            else: ranks_result[f"{score_key}_global"] = "?"
+
+        url = rank_url(player, sort_by=score_key, scope="country")
+        if url: jobs[f"{score_key}_country"] = url
+        else: ranks_result[f"{score_key}_country"] = "?"
+
+    ranks_result.update(fetch_ranks(jobs))
     return ranks_result
 
 def details(player, ranks):
