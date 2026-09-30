@@ -1,7 +1,10 @@
 import json
+import unicodedata
 from urllib.parse import quote
 
 from api import fetchapi_sync, fetchall_sync, stats, BASE_URL
+
+PASS_DISPLAY_LIMIT = 16
 
 def search(query):
     url = f"{BASE_URL}/v3/players/search?query={query}"
@@ -73,10 +76,10 @@ def get_all_ranks(player):
     ranks_result.update(fetch_ranks(jobs))
     return ranks_result
 
-def details(player, ranks):
+def details(player, ranks, passes=None, passes_total=0):
     discord = player.get("discord")
     td = player.get("topDiff")
-    
+
     print("\n" + "=" * 70)
     print(f"名称: {player.get('name')}")
     print(f"ID: {player.get('id')}")
@@ -115,6 +118,10 @@ def details(player, ranks):
     if td: 
         print(f"最高通关难度: {td.get('name')} ({td.get('sortOrder')})")
 
+    if passes is None:
+        passes, passes_total = fetch_player_passes(player.get("name"), player.get("id"))
+    print_passes(passes, passes_total)
+
 def choose_player(results):
     if len(results) == 1: return results[0]
 
@@ -136,7 +143,8 @@ def run(player):
         player = get_player(player["id"])
         
     ranks = get_all_ranks(player)
-    details(player, ranks)
+    passes, passes_total = fetch_player_passes(player.get("name"), player.get("id"))
+    details(player, ranks, passes, passes_total)
     print()
     stats()
 
@@ -188,3 +196,98 @@ def handle_player_lookup():
             break
         else:
             print("搜索类型无效")
+
+
+
+_difficulty_names = None
+
+def difficulty_name(sort_order):
+    global _difficulty_names
+    if _difficulty_names is None:
+        _difficulty_names = {}
+        try:
+            for item in fetchapi_sync(f"{BASE_URL}/v2/database/difficulties"):
+                if item.get("sortOrder") is not None:
+                    _difficulty_names[str(item["sortOrder"])] = item.get("name")
+        except Exception:
+            pass
+
+    if sort_order is None:
+        return "-"
+    return _difficulty_names.get(str(sort_order)) or str(sort_order)
+
+def display_width(text):
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in str(text))
+
+def cut_width(text, width):
+    text = str(text)
+    if display_width(text) <= width: return text
+
+    out, used = "", 0
+    for ch in text:
+        w = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+        if used + w > width - 1: break
+        out += ch
+        used += w
+    return out + "…"
+
+def fetch_player_passes(name, player_id, limit=PASS_DISPLAY_LIMIT, fetch_cap=64):
+    if not name or player_id is None: return [], 0
+
+    collected, total = [], 0
+    for offset in range(0, 256, fetch_cap):
+        url = f"{BASE_URL}/v2/database/passes?query={quote(str(name))}&limit={fetch_cap}&offset={offset}"
+        try:
+            data = fetchapi_sync(url)
+        except Exception:
+            break
+
+        if not isinstance(data, dict): break
+        total = data.get("count") or total
+
+        rows = data.get("results") or []
+        for row in rows:
+            if row.get("playerId") == player_id:
+                collected.append(row)
+                if len(collected) >= limit: return collected, total
+        if len(rows) < fetch_cap: break
+
+    return collected, total
+
+def pad_width(text, width):
+    return str(text) + " " * max(0, width - display_width(text))
+
+def print_passes(passes, total=0):
+    if not passes: return
+
+    print()
+    print(f"通关谱面 (按分数降序，前 {len(passes)} 个" + (f"，共匹配 {total} 条):" if total else "):"))
+    print("   " + f"{'分数':>11} {'ACC':>9} " + pad_width("难度", 7)
+          + pad_width("谱面", 35) + "标签")
+    for idx, row in enumerate(passes, start=1):
+        level = row.get("level") or {}
+        song = level.get("song") or f"谱面 {row.get('levelId')}"
+        artist = level.get("artist")
+        if artist and artist not in str(song): song = f"{song} - {artist}"
+
+        score = row.get("scoreV2")
+        score_text = f"{score:.2f}".rstrip("0").rstrip(".") if isinstance(score, (int, float)) else "-"
+        acc = row.get("accuracy")
+        acc_text = f"{acc * 100:.4f}%" if isinstance(acc, (int, float)) else "-"
+
+        tags = []
+        if row.get("isWorldsFirst"): tags.append("世界首通")
+        if row.get("isWorldsFirstPP"): tags.append("世界首杀")
+        if row.get("isNoHoldTap"): tags.append("NoHoldTap")
+        speed = row.get("speed")
+        if isinstance(speed, (int, float)) and abs(speed - 1) > 1e-9: tags.append(f"{speed:g}x")
+        if row.get("isDuplicate"): tags.append("重复")
+        if row.get("isHidden"): tags.append("隐藏")
+        if row.get("isXPerfectMode"): tags.append("XPerfect")
+        if row.get("isWrongJudgement"): tags.append("判定异常")
+        if row.get("is12K"): tags.append("12K")
+        elif row.get("is16K"): tags.append("16K")
+
+        print(f"{idx:>3} {score_text:>10} {acc_text:>9} "
+              + pad_width(difficulty_name(level.get("diffId")), 7)
+              + pad_width(cut_width(song, 34), 35) + " ".join(tags))

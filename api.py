@@ -22,7 +22,7 @@ def set_verbose(enabled: bool):
 
 def log(msg):
     if VERBOSE:
-        print(msg)
+        print(msg, flush=True)
 
 def _start_request(url):
     global count, span_start
@@ -30,22 +30,33 @@ def _start_request(url):
         span_start = time.perf_counter()
         if not VERBOSE:
             print("查询中...", flush=True)
-    if VERBOSE:
-        print(url)
     count += 1
+    if VERBOSE:
+        print(f"#{count} {url}", flush=True)
+    return count
 
 def _new_client():
     return httpx.AsyncClient(proxy=PROXY, timeout=30)
 
 async def _get(client: httpx.AsyncClient, url: str):
     global api_time, span_end
-    _start_request(url)
+    idx = _start_request(url)
     t0 = time.perf_counter()
     try:
         r = await client.get(url)
-    finally:
-        span_end = time.perf_counter()
-        api_time += span_end - t0
+        status, reason = r.status_code, r.reason_phrase
+    except Exception as e:
+        t1 = time.perf_counter()
+        span_end = t1
+        api_time += t1 - t0
+        log(f"    <- #{idx} 请求失败 {type(e).__name__}: {e}  {(t1 - t0) * 1000:.2f} ms")
+        raise
+
+    t1 = time.perf_counter()
+    span_end = t1
+    api_time += t1 - t0
+    log(f"    <- #{idx} {status} {reason}  {(t1 - t0) * 1000:.2f} ms")
+
     r.raise_for_status()
     return r.json()
 
