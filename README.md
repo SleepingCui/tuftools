@@ -11,8 +11,9 @@
 
 ## 构建
 
-需要 C++17 编译器（开发环境为 MinGW-w64 g++ / GCC 15.2.0 ）
+需要 C++17 编译器（开发环境为 MinGW-w64 g++ / GCC 15.2.0，Linux 上 GCC / Clang ≥ 7 亦可）。平台差异只在 HTTP 层：Windows 用 WinHTTP，其它平台走 [src/http.cpp](src/http.cpp) 里的 `curl` 命令回退分支。
 
+### Windows（PowerShell）
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1               # CMake，Release（默认）
@@ -21,18 +22,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1 cmake -Debug  # 
 powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1 -Clean        # 先清空 build/
 ```
 
-
-### 直接调用 CMake
+#### 直接调用 CMake
 
 ```powershell
 cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
-### g++
+#### 直接调用 g++
 
 ```powershell
 g++ -std=c++17 -O2 -Wall -static -Ithird_party -o build/tuftools.exe src/*.cpp -lwinhttp
+```
+
+### Linux（GCC / Clang）
+
+```bash
+# CMake（推荐）
+sudo apt install cmake g++ curl        # Debian/Ubuntu；其它发行版换成对应包管理器
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+
+# 或者一行 g++，不用 CMake
+mkdir -p build
+g++ -std=c++17 -O2 -Wall -Ithird_party -o build/tuftools src/*.cpp
 ```
 
 
@@ -45,7 +58,7 @@ tuftools [--proxy VAR] [--verbose]
 
 `--proxy` 指定 HTTP(S) 代理，`--verbose` / `-v` 打印每个请求的详情。
 
-
+可执行文件是 Windows 的 `build\tuftools.exe` 或 Linux 的 `build/tuftools`；请在仓库根目录运行，因为 `difficulties.json` / `costs.json` 是按当前工作目录读写的。
 
 ## 目录结构
 
@@ -56,12 +69,10 @@ tuftools [--proxy VAR] [--verbose]
 | [src/info.cpp](src/info.cpp) / [src/info.hpp](src/info.hpp) | `info.py` | 玩家搜索、详情、排名查询、通关谱面列表 |
 | [src/tools.cpp](src/tools.cpp) / [src/tools.hpp](src/tools.hpp) | `tools/*.py` | 分数计算器、难度库管理、XACC 反解 |
 | [src/api.cpp](src/api.cpp) / [src/api.hpp](src/api.hpp) | `api.py` | 请求计数、verbose 日志、`stats()` |
-| [src/http.cpp](src/http.cpp) / [src/http.hpp](src/http.hpp) | `requests` | WinHTTP GET 客户端 |
+| [src/http.cpp](src/http.cpp) / [src/http.hpp](src/http.hpp) | `requests` | HTTP GET 客户端（Windows 用 WinHTTP，其它平台用 `curl` 命令） |
 | [src/pyjson.hpp](src/pyjson.hpp) | `json`, `urllib.parse` | 基于 `nlohmann::ordered_json` 的 Python 语义薄适配层 |
 | [src/numfmt.hpp](src/numfmt.hpp) | f-string 格式化 | `format_fixed`、`trim_fixed`、`format_g` |
 | [src/console.hpp](src/console.hpp) | `input()` | UTF-8 控制台设置与输入封装 |
-
-
 
 ## 来源
 
