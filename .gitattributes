@@ -1,0 +1,2 @@
+# Vendored third-party headers: keep them byte-identical to the upstream releases.
+third_party/** -text

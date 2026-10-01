@@ -22,18 +22,12 @@ jobs:
         ref: ${{ github.event.inputs.branch || github.ref }}
         fetch-depth: 0 
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Set up MinGW-w64 (g++)
+      uses: msys2/setup-msys2@v2
       with:
-        python-version: '3.13' 
-        cache: 'pip'
-
-    - name: Install Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    - name: Set up MSVC 
-      uses: ilammy/msvc-dev-cmd@v1
+        msystem: MINGW64
+        update: false
+        install: mingw-w64-x86_64-gcc
 
     - name: Generate Version and Release Tag
       id: meta
@@ -47,9 +41,12 @@ jobs:
         PREV_SHA=$(git rev-list --tags --max-count=1 2>/dev/null || git rev-list --max-parents=0 HEAD | head -n 1)
         echo "PREV_SHA=${PREV_SHA}" >> $GITHUB_ENV
 
-    - name: Build with Nuitka
+    - name: Build with g++
+      shell: msys2 {0}
       run: |
-        python -m nuitka --onefile --assume-yes-for-downloads --output-filename=tuftools.exe main.py
+        mkdir -p build
+        g++ -std=c++17 -O2 -Wall -static -Ithird_party -o build/tuftools.exe src/*.cpp -lwinhttp
+
     - name: Create Release
       id: create_release
       uses: softprops/action-gh-release@v2
@@ -57,9 +54,9 @@ jobs:
         tag_name: ${{ steps.meta.outputs.tag }}
         name: ci-${{ steps.meta.outputs.tag }}
         body: |
-          build with nuitka
+          build with g++ (MinGW-w64)
         files: |
-          tuftools.exe
+          build/tuftools.exe
           
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
