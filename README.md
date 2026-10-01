@@ -11,9 +11,8 @@
 
 ## 构建
 
-需要 C++17 编译器（开发环境为 MinGW-w64 g++ / GCC 15.2.0），Windows 上链接系统自带的 `winhttp`。无需包管理器，也无需联网：两个第三方头文件库已经 vendored 在 [third_party/](third_party/README.md)。
+需要 C++17 编译器（开发环境为 MinGW-w64 g++ / GCC 15.2.0 ）
 
-### 推荐：`build.ps1`（默认走 CMake）
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1               # CMake，Release（默认）
@@ -22,7 +21,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1 cmake -Debug  # 
 powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1 -Clean        # 先清空 build/
 ```
 
-第一个位置参数选后端（`cmake` 或 `mingw`，省略即 `cmake`）；`-ExecutionPolicy Bypass` 是因为脚本未签名。脚本会自动寻找 `cmake` 与 `g++`：CMake 优先使用 `Ninja`，没有 Ninja 时用 `MinGW Makefiles`（配合 `g++` 同目录的 `mingw32-make.exe`）。
 
 ### 直接调用 CMake
 
@@ -31,13 +29,13 @@ cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
-### 直接一行 g++
+### g++
 
 ```powershell
 g++ -std=c++17 -O2 -Wall -static -Ithird_party -o build/tuftools.exe src/*.cpp -lwinhttp
 ```
 
-三种方式产物统一为 `build/tuftools.exe`（CMake 用 `RUNTIME_OUTPUT_DIRECTORY` 保证了这一点，多配置生成器也一样）。`-static` 让产物不依赖 `libwinpthread-1.dll` / `libstdc++-6.dll`，方便直接分发单文件 exe，CMake 在 MinGW 下会自动加上。CI（[.github/workflows/build.yml](.github/workflows/build.yml)）用的是 MSYS2 里的一行 g++。
+
 
 ## 使用
 
@@ -47,7 +45,7 @@ tuftools [--proxy VAR] [--verbose]
 
 `--proxy` 指定 HTTP(S) 代理，`--verbose` / `-v` 打印每个请求的详情。
 
-> **请在仓库根目录运行。** `difficulties.json` 与 `costs.json` 按当前工作目录读写（与 Python 版本行为一致）；缺少 `difficulties.json` 时会尝试从 `api.tuforums.com` 下载。
+
 
 ## 目录结构
 
@@ -63,12 +61,7 @@ tuftools [--proxy VAR] [--verbose]
 | [src/numfmt.hpp](src/numfmt.hpp) | f-string 格式化 | `format_fixed`、`trim_fixed`、`format_g` |
 | [src/console.hpp](src/console.hpp) | `input()` | UTF-8 控制台设置与输入封装 |
 
-## 与 Python 版本的差异说明
 
-* 数值与字符串按 Python 的 `repr` / `str` 规则格式化（`py_float_str`、`py_round`、`py_repr`），输出尽量与 Python 版一致。
-* JSON 文件按 4 空格（`costs.json`）与 2 空格（`difficulties.json`）缩进写出，并保留键顺序。
-* XACC 反解移植了 Python 的动态规划实现（含可选的「固定判定数量」）。
-* stdin 读到 EOF 时干净退出而不是死循环，便于管道喂输入（`"..." | tuftools.exe`）。
 
 ## 来源
 

@@ -22,12 +22,12 @@ jobs:
         ref: ${{ github.event.inputs.branch || github.ref }}
         fetch-depth: 0 
 
-    - name: Set up MinGW-w64 (g++)
+    - name: Set up MinGW-w64, CMake and Ninja
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
         update: false
-        install: mingw-w64-x86_64-gcc
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
 
     - name: Generate Version and Release Tag
       id: meta
@@ -41,11 +41,13 @@ jobs:
         PREV_SHA=$(git rev-list --tags --max-count=1 2>/dev/null || git rev-list --max-parents=0 HEAD | head -n 1)
         echo "PREV_SHA=${PREV_SHA}" >> $GITHUB_ENV
 
-    - name: Build with g++
+    - name: Configure (CMake + Ninja)
       shell: msys2 {0}
-      run: |
-        mkdir -p build
-        g++ -std=c++17 -O2 -Wall -static -Ithird_party -o build/tuftools.exe src/*.cpp -lwinhttp
+      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      shell: msys2 {0}
+      run: cmake --build build --parallel
 
     - name: Create Release
       id: create_release
@@ -54,7 +56,7 @@ jobs:
         tag_name: ${{ steps.meta.outputs.tag }}
         name: ci-${{ steps.meta.outputs.tag }}
         body: |
-          build with g++ (MinGW-w64)
+          build with CMake + MinGW-w64 (Ninja)
         files: |
           build/tuftools.exe
           
