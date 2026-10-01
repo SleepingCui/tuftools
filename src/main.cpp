@@ -1,0 +1,81 @@
+// Port of main.py: CLI argument handling plus the top level menu loop.
+#include <argparse/argparse.hpp>
+#include <exception>
+#include <iostream>
+#include <string>
+
+#include "api.hpp"
+#include "console.hpp"
+#include "info.hpp"
+#include "menus.hpp"
+
+namespace {
+
+int run(int argc, char** argv) {
+    argparse::ArgumentParser program("tuftools", "1.0", argparse::default_arguments::help);
+    program.add_description("TUF Tools");
+    program.add_argument("--proxy").help("http proxy URL");
+    program.add_argument("--verbose", "-v").help("Verbose output").default_value(false).implicit_value(true);
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+        std::cerr << program << std::endl;
+        return 2;
+    }
+
+    std::string proxy;
+    if (const auto value = program.present<std::string>("--proxy")) {
+        proxy = *value;
+    }
+    const bool verbose = program.get<bool>("--verbose");
+
+    if (!proxy.empty()) {
+        tuf::set_proxies(proxy);
+    }
+    tuf::set_verbose(verbose);
+
+    std::cout << "=== TUF Tools ===" << std::endl;
+    std::cout << "Github: github.com/sleepingcui/tuftools TUF: tuforums.com" << std::endl;
+
+    while (true) {
+        std::cout << "\n选择功能系统" << std::endl;
+        std::cout << "1. 玩家数据查询" << std::endl;
+        std::cout << "2. PP计算器" << std::endl;
+        std::cout << "3. XACC计算器" << std::endl;
+        std::cout << "q. 退出" << std::endl;
+
+        const std::string choice = tuf::read_trimmed("\n> ");
+
+        if (choice == "1") {
+            tuf::handle_player_lookup();
+        } else if (choice == "2") {
+            tuf::handle_pp_calc();
+        } else if (choice == "3") {
+            tuf::handle_acc_calc();
+        } else if (choice == "q") {
+            std::cout << "exit" << std::endl;
+            break;
+        } else {
+            std::cout << "无效选择" << std::endl;
+        }
+    }
+
+    return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    tuf::setup_console_utf8();
+    try {
+        return run(argc, argv);
+    } catch (const tuf::InputClosed&) {
+        // Piped input ended: behave like a normal quit instead of looping.
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "错误: " << e.what() << std::endl;
+        return 1;
+    }
+}
