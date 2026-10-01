@@ -119,8 +119,15 @@ def handle_pp_calc():
         return
 
     marathon = input("是否Marathon(y/N): ").strip().lower() == "y"
-    tilecount_input = input("关卡砖块数 (默认0): ").strip()
-    tilecount = int(tilecount_input) if tilecount_input else 0
+    tilecount_input = input("关卡砖块数: ").strip()
+    try:
+        tilecount = int(tilecount_input)
+    except ValueError:
+        print("砖块数必须是整数")
+        return
+    if tilecount <= 0:
+        print("砖块数必须大于 0")
+        return
 
     try:
         level_data = calculator.build_level_data(difficulty_name=difficulty, marathon=marathon, tilecount=tilecount, base_score=base_score)
@@ -146,7 +153,7 @@ def handle_pp_calc():
     print(f"分数倍率: {result['multiplier']}x")
     print(f"速度修正: {result['speed_mod']}x")
     print(f"空敲修正: {result['empty_tap_mod']}x")
-    print(f"PP分: {result['score']}")
+    print(f"\nPP分: {result['base_score']} ({result['raw_score']})" if result['raw_score'] < result['base_score'] else f"PP分: {result['score']}")
 
         
     calc_rank = input("\n是否计算排名变化? (y/N): ").strip().lower()

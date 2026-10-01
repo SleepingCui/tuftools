@@ -106,12 +106,14 @@ class TUFScoreCalculator:
         tilecount = int(level.get("tilecount", 0) or 0)
         empty_tap_mod = self.calculate_empty_tap_modifier(misses, tilecount)
         default_setting_mod = 0.9 if is_no_hold_tap else 1.0
-        final_score = base_score * multiplier * speed_mod * empty_tap_mod * default_setting_mod
+        raw_score = base_score * multiplier * speed_mod * empty_tap_mod * default_setting_mod
+        final_score = max(raw_score, base_score)
         
         return {
             "accuracy": accuracy,
             "accuracy_pct": round(accuracy_pct, 2),
             "score": final_score,
+            "raw_score": raw_score,
             "base_score": base_score,
             "base_source": base_source,
             "multiplier": round(multiplier, 4),
