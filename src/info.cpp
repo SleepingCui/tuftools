@@ -242,10 +242,10 @@ void details(const Json& player, const std::map<std::string, RankVal>& ranks, co
     const Json& top_diff = player.get("topDiff");
 
     std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "名称: " << py_repr(player.get("name")) << std::endl;
+    std::cout << "名称: " << py_text(player.get("name")) << std::endl;
     std::cout << "ID: " << py_repr(player.get("id")) << std::endl;
-    std::cout << "Discord: " << (discord.is_null() ? std::string("?") : py_repr(discord.get("username"))) << std::endl;
-    std::cout << "国家: " << py_repr(player.get("country")) << std::endl;
+    std::cout << "Discord: " << (discord.is_null() ? std::string("?") : py_text(discord.get("username"))) << std::endl;
+    std::cout << "国家: " << py_text(player.get("country")) << std::endl;
     std::cout << std::endl;
     std::cout << "全球排名 (排位分): " << metric_rank(ranks, "rankedScore_global") << std::endl;
     std::cout << "全球排名 (总分): " << metric_rank(ranks, "totalScoreV2_global") << std::endl;
@@ -281,7 +281,7 @@ void details(const Json& player, const std::map<std::string, RankVal>& ranks, co
     std::cout << "世界首通数: " << py_repr(player.get("worldsFirstCount")) << std::endl;
     std::cout << "世界首杀数: " << py_repr(player.get("worldsFirstPPCount")) << std::endl;
     if (top_diff.truthy()) {
-        std::cout << "最高通关难度: " << py_repr(top_diff.get("name")) << " (" << py_repr(top_diff.get("sortOrder"))
+        std::cout << "最高通关难度: " << py_text(top_diff.get("name")) << " (" << py_text(top_diff.get("sortOrder"))
                   << ")" << std::endl;
     }
 

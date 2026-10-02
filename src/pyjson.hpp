@@ -266,6 +266,11 @@ inline std::string py_repr(const Json& value) {
 
 inline std::string py_repr_q(const Json& value) { return value.is_null() ? "?" : py_repr(value); }
 
+// Plain rendering for value display: a string loses repr's quotes (名称/国家/… would
+// otherwise print as 'SleepingCui'), everything else keeps py_repr (numbers bare,
+// null as None).
+inline std::string py_text(const Json& value) { return value.is_string() ? value.as_string() : py_repr(value); }
+
 // --------------------------------------------------------- urllib quoting --
 
 inline std::string url_quote(const std::string& text) {

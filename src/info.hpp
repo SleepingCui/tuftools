@@ -28,7 +28,7 @@ struct RankVal {
         if (value.is_number()) return from_number(value.as_double());
         if (value.is_null()) return unknown();
         RankVal out;
-        out.text = py_repr(value);
+        out.text = py_text(value);
         return out;
     }
 
