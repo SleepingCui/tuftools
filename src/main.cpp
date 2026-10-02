@@ -8,6 +8,7 @@
 #include "console.hpp"
 #include "info.hpp"
 #include "menus.hpp"
+#include "version.hpp"
 
 namespace {
 
@@ -38,6 +39,7 @@ int run(int argc, char** argv) {
 
     std::cout << "=== TUF Tools ===" << std::endl;
     std::cout << "Github: github.com/sleepingcui/tuftools TUF: tuforums.com" << std::endl;
+    std::cout << "版本: " << TUF_VERSION << "   编译时间:" << TUF_BUILD_TIME << std::endl;
 
     while (true) {
         std::cout << "\n选择功能系统" << std::endl;

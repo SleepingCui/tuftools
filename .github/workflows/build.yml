@@ -36,14 +36,18 @@ jobs:
         BUILD_TIME=$(date +'%Y%m%d-%H%M%S')
         SHORT_SHA=$(git rev-parse --short HEAD)
         TAG_NAME="${BUILD_TIME}-${SHORT_SHA}"
+        BUILD_STAMP="${BUILD_TIME:0:4}-${BUILD_TIME:4:2}-${BUILD_TIME:6:2} ${BUILD_TIME:9:2}:${BUILD_TIME:11:2}:${BUILD_TIME:13:2}"
         echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
+        echo "BUILD_STAMP=${BUILD_STAMP}" >> $GITHUB_ENV
         echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
         PREV_SHA=$(git rev-list --tags --max-count=1 2>/dev/null || git rev-list --max-parents=0 HEAD | head -n 1)
         echo "PREV_SHA=${PREV_SHA}" >> $GITHUB_ENV
 
     - name: Configure (CMake + Ninja)
       shell: msys2 {0}
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      run: |
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          -DTUF_VERSION="${TAG_NAME}" -DTUF_BUILD_TIME="${BUILD_STAMP} UTC"
 
     - name: Build
       shell: msys2 {0}
@@ -57,6 +61,7 @@ jobs:
         name: ci-${{ steps.meta.outputs.tag }}
         body: |
           build with CMake + MinGW-w64 (Ninja)
+          Compiled at: ${{ env.BUILD_STAMP }} (UTC)
         files: |
           build/tuftools.exe
           
