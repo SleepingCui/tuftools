@@ -1,5 +1,5 @@
-// Synchronous HTTPS GET, implemented with WinHTTP on Windows and with the
-// curl binary as a fallback elsewhere. No third-party libraries required.
+// Synchronous HTTPS GET, implemented with WinHTTP on Windows and with libcurl
+// elsewhere (macOS / Linux).
 #pragma once
 
 #include <stdexcept>

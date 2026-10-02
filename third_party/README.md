@@ -14,4 +14,5 @@ files..." — see each upstream repository for the full license text.
 
 JSON handling uses `nlohmann::ordered_json` so object key order is preserved
 (matching the Python `dict` behaviour of the original tool). HTTP uses the
-WinHTTP API that ships with Windows, so no TLS library is vendored.
+WinHTTP API that ships with Windows and the system libcurl on macOS/Linux, so
+no TLS library is vendored.

@@ -7,14 +7,18 @@
 #include <stdexcept>
 
 #include "api.hpp"
+#include "apppaths.hpp"
 #include "console.hpp"
 #include "numfmt.hpp"
 
 namespace tuf {
 
-// ============================================================== CostsMan ====
+namespace {
+constexpr const char* COSTS_FILE = "costs.json";
+constexpr const char* DIFFICULTIES_FILE = "difficulties.json";
+}  // namespace
 
-const std::string COSTS_FILE = "costs.json";
+// ============================================================== CostsMan ====
 
 const std::vector<std::string>& jd_cost_keys() {
     static const std::vector<std::string> keys = {"perfect", "failMiss", "tooEarly", "early",
@@ -32,7 +36,7 @@ const std::map<std::string, double>& default_jd_costs() {
 
 std::map<std::string, double> costs_load() {
     const std::map<std::string, double>& defaults = default_jd_costs();
-    std::ifstream file(COSTS_FILE, std::ios::binary);
+    std::ifstream file(data_file(COSTS_FILE), std::ios::binary);
     if (!file.good()) {
         costs_save(defaults);
         return defaults;
@@ -59,7 +63,7 @@ void costs_save(const std::map<std::string, double>& costs) {
             auto it = costs.find(key);
             root.set(key, it == costs.end() ? default_jd_costs().at(key) : it->second);
         }
-        std::ofstream file(COSTS_FILE, std::ios::binary | std::ios::trunc);
+        std::ofstream file(data_file(COSTS_FILE), std::ios::binary | std::ios::trunc);
         file << root.dump(4);
     } catch (const std::exception& e) {
         std::cout << "保存配置文件失败: " << e.what() << std::endl;
@@ -68,12 +72,10 @@ void costs_save(const std::map<std::string, double>& costs) {
 
 // ============================================================== DiffMan =====
 
-const std::string DIFFICULTIES_FILE = "difficulties.json";
-
 DifficultyManager::DifficultyManager() { load(); }
 
 bool DifficultyManager::file_exists() {
-    std::ifstream file(DIFFICULTIES_FILE, std::ios::binary);
+    std::ifstream file(data_file(DIFFICULTIES_FILE), std::ios::binary);
     return file.good();
 }
 
@@ -82,7 +84,7 @@ std::vector<Json> DifficultyManager::load() {
         std::cout << "下载难度数据..." << std::endl;
         return update();
     }
-    std::ifstream file(DIFFICULTIES_FILE, std::ios::binary);
+    std::ifstream file(data_file(DIFFICULTIES_FILE), std::ios::binary);
     std::ostringstream buffer;
     buffer << file.rdbuf();
     const Json parsed = Json::parse(buffer.str());
@@ -106,7 +108,7 @@ std::vector<Json> DifficultyManager::update() {
         }
     }
 
-    std::ofstream file(DIFFICULTIES_FILE, std::ios::binary | std::ios::trunc);
+    std::ofstream file(data_file(DIFFICULTIES_FILE), std::ios::binary | std::ios::trunc);
     file << Json::array(result).dump(2);
 
     difficulties_ = result;

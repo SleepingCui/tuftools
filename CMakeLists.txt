@@ -27,11 +27,20 @@ endif()
 
 if(WIN32)
     target_link_libraries(tuftools PRIVATE winhttp)
+else()
+    # macOS ships libcurl in the SDK; Linux needs libcurl4-openssl-dev (or equivalent).
+    find_package(CURL REQUIRED)
+    target_link_libraries(tuftools PRIVATE CURL::libcurl)
 endif()
 
 if(MINGW)
     # Keep the executable free of libwinpthread-1.dll / libstdc++-6.dll.
     target_link_options(tuftools PRIVATE -static)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+    # std::filesystem lives in a separate library before GCC 9.
+    target_link_libraries(tuftools PRIVATE stdc++fs)
 endif()
 
 if(MSVC)

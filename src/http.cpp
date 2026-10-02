@@ -174,22 +174,29 @@ HttpResponse http_get(const std::string& url, const std::string& proxy, int time
 
 }  // namespace tuf
 
-#else  // ------------------------------ non-Windows fallback ------------------------------
+#else  // ------------------------------ non-Windows (libcurl) ------------------------------
+
+#include <curl/curl.h>
+
+#include <mutex>
 
 namespace tuf {
 namespace {
 
-std::string shell_quote(const std::string& text) {
-    std::string out = "'";
-    for (char c : text) {
-        if (c == '\'') {
-            out += "'\\''";
-        } else {
-            out.push_back(c);
-        }
+std::once_flag g_curl_once;
+CURLcode g_curl_init_code = CURLE_OK;
+
+void ensure_curl_global_init() {
+    std::call_once(g_curl_once, []() { g_curl_init_code = curl_global_init(CURL_GLOBAL_DEFAULT); });
+    if (g_curl_init_code != CURLE_OK) {
+        throw std::runtime_error(std::string("请求失败: libcurl 初始化失败: ") +
+                                 curl_easy_strerror(g_curl_init_code));
     }
-    out.push_back('\'');
-    return out;
+}
+
+size_t write_body(char* data, size_t size, size_t nmemb, void* userdata) {
+    static_cast<std::string*>(userdata)->append(data, size * nmemb);
+    return size * nmemb;
 }
 
 }  // namespace
@@ -204,33 +211,45 @@ std::string http_reason_from_status(int status) {
 }
 
 HttpResponse http_get(const std::string& url, const std::string& proxy, int timeout_sec) {
-    std::string command = "curl -sS -L --max-time " + std::to_string(timeout_sec);
-    if (!proxy.empty()) command += " -x " + shell_quote(proxy);
-    command += " -w '\\n%{http_code}' " + shell_quote(url) + " 2>/dev/null";
+    ensure_curl_global_init();
 
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) throw std::runtime_error("请求失败: 无法执行 curl: " + url);
-
-    std::string output;
-    char buffer[4096];
-    size_t read = 0;
-    while ((read = std::fread(buffer, 1, sizeof(buffer), pipe)) > 0) output.append(buffer, read);
-    const int rc = pclose(pipe);
-    if (rc != 0) throw std::runtime_error("请求失败: curl 退出码 " + std::to_string(rc) + " " + url);
+    CURL* handle = curl_easy_init();
+    if (!handle) throw std::runtime_error("请求失败: 无法创建 curl 句柄: " + url);
+    struct CurlGuard {
+        CURL* handle;
+        ~CurlGuard() { curl_easy_cleanup(handle); }
+    } guard{handle};
 
     HttpResponse response;
-    const size_t marker = output.rfind('\n');
-    if (marker == std::string::npos) {
-        response.body = output;
-    } else {
-        response.body = output.substr(0, marker);
-        try {
-            response.status = std::stoi(output.substr(marker + 1));
-        } catch (const std::exception&) {
-            response.status = 0;
-        }
+    char error_buffer[CURL_ERROR_SIZE] = {0};
+
+    curl_easy_setopt(handle, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 10L);
+    curl_easy_setopt(handle, CURLOPT_USERAGENT, "tuftools/1.0 (cpp)");
+    curl_easy_setopt(handle, CURLOPT_ACCEPT_ENCODING, "");  // ask libcurl to request/decompress gzip etc.
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_body);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, static_cast<long>(timeout_sec));
+    curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer);
+    if (!proxy.empty()) curl_easy_setopt(handle, CURLOPT_PROXY, proxy.c_str());
+
+#if LIBCURL_VERSION_NUM >= 0x075500  // 7.85.0: string protocol lists
+    curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(handle, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+#endif
+
+    const CURLcode code = curl_easy_perform(handle);
+    if (code != CURLE_OK) {
+        const char* detail = error_buffer[0] ? error_buffer : curl_easy_strerror(code);
+        throw std::runtime_error("请求失败: " + std::string(detail) + " " + url);
     }
+
+    long status = 0;
+    curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status);
+    response.status = static_cast<int>(status);
     response.reason = http_reason_from_status(response.status);
+
     if (response.status >= 400) {
         throw HttpError("HTTP " + std::to_string(response.status) + " " + response.reason + " for url: " + url,
                         response.status);

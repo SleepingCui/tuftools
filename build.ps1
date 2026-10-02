@@ -30,7 +30,20 @@ if (-not (Test-Path (Join-Path $thirdParty "nlohmann\json.hpp"))) {
 
 if ($Clean -and (Test-Path $out)) {
     Write-Host "removing $out"
+    # Data files live next to the executable, so keep them across -Clean.
+    $saved = Join-Path ([System.IO.Path]::GetTempPath()) ("tuftools-data-" + [System.Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $saved | Out-Null
+    foreach ($name in @("costs.json", "difficulties.json")) {
+        $file = Join-Path $out $name
+        if (Test-Path $file) { Copy-Item $file $saved }
+    }
     Remove-Item -Recurse -Force $out
+    New-Item -ItemType Directory -Force -Path $out | Out-Null
+    foreach ($name in @("costs.json", "difficulties.json")) {
+        $file = Join-Path $saved $name
+        if (Test-Path $file) { Copy-Item $file (Join-Path $out $name) }
+    }
+    Remove-Item -Recurse -Force $saved
 }
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 

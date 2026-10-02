@@ -13,14 +13,13 @@
 namespace tuf {
 
 // ---------------------------------------------------------------- CostsMan --
-extern const std::string COSTS_FILE;  // "costs.json"
+// Data files live next to the executable; see apppaths.hpp.
 const std::vector<std::string>& jd_cost_keys();
 const std::map<std::string, double>& default_jd_costs();
 std::map<std::string, double> costs_load();
 void costs_save(const std::map<std::string, double>& costs);
 
 // -------------------------------------------------------------- DiffMan -----
-extern const std::string DIFFICULTIES_FILE;  // "difficulties.json"
 class DifficultyManager {
 public:
     DifficultyManager();

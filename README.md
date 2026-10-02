@@ -11,7 +11,7 @@
 
 ## 构建
 
-需要 C++17 编译器（开发环境为 MinGW-w64 g++ / GCC 15.2.0，Linux 上 GCC / Clang ≥ 7 亦可）。平台差异只在 HTTP 层：Windows 用 WinHTTP，其它平台走 [src/http.cpp](src/http.cpp) 里的 `curl` 命令回退分支。
+需要 C++17 编译器（开发环境为 MinGW-w64 g++ / GCC 15.2.0，Linux 上 GCC / Clang ≥ 7 亦可）。平台差异只在 HTTP 层：Windows 用 WinHTTP，macOS/Linux 用 libcurl（见 [src/http.cpp](src/http.cpp)）。
 
 ### Windows（PowerShell）
 
@@ -35,17 +35,32 @@ cmake --build build --parallel
 g++ -std=c++17 -O2 -Wall -static -Ithird_party -o build/tuftools.exe src/*.cpp -lwinhttp
 ```
 
-### Linux（GCC / Clang）
+### macOS / Linux（GCC / Clang）
 
 ```bash
-# CMake（推荐）
-sudo apt install cmake g++ curl        # Debian/Ubuntu；其它发行版换成对应包管理器
+# 依赖：编译器 + CMake + libcurl 开发头文件
+#   macOS  自带 libcurl，无需安装
+#   Debian/Ubuntu：sudo apt install cmake g++ libcurl4-openssl-dev
+#   Fedora：       sudo dnf install cmake gcc-c++ libcurl-devel
+
+./build.sh                 # CMake，Release（默认）
+./build.sh cmake --debug   # CMake，Debug
+./build.sh direct          # 直接调 g++/clang++，不经过 CMake
+./build.sh --clean         # 先清空 build/
+```
+
+也可直接调用 CMake：
+
+```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
+```
 
-# 或者一行 g++，不用 CMake
+或者一行 g++：
+
+```bash
 mkdir -p build
-g++ -std=c++17 -O2 -Wall -Ithird_party -o build/tuftools src/*.cpp
+g++ -std=c++17 -O2 -Wall -Ithird_party -o build/tuftools src/*.cpp -lcurl
 ```
 
 
@@ -58,7 +73,7 @@ tuftools [--proxy VAR] [--verbose]
 
 `--proxy` 指定 HTTP(S) 代理，`--verbose` / `-v` 打印每个请求的详情。
 
-可执行文件是 Windows 的 `build\tuftools.exe` 或 Linux 的 `build/tuftools`；请在仓库根目录运行，因为 `difficulties.json` / `costs.json` 是按当前工作目录读写的。
+可执行文件是 Windows 的 `build\tuftools.exe` 或 macOS/Linux 的 `build/tuftools`，可在任意目录运行。`costs.json` / `difficulties.json` 默认与可执行文件放在同一目录（便携）；若该目录不可写，则回退到用户数据目录（Linux `~/.local/share/tuftools`、macOS `~/Library/Application Support/tuftools`、Windows `%LOCALAPPDATA%/tuftools`）。也可用环境变量 `TUFTOOLS_DATA_DIR` 指定其它数据目录。
 
 ## 目录结构
 
@@ -69,7 +84,8 @@ tuftools [--proxy VAR] [--verbose]
 | [src/info.cpp](src/info.cpp) / [src/info.hpp](src/info.hpp) | `info.py` | 玩家搜索、详情、排名查询、通关谱面列表 |
 | [src/tools.cpp](src/tools.cpp) / [src/tools.hpp](src/tools.hpp) | `tools/*.py` | 分数计算器、难度库管理、XACC 反解 |
 | [src/api.cpp](src/api.cpp) / [src/api.hpp](src/api.hpp) | `api.py` | 请求计数、verbose 日志、`stats()` |
-| [src/http.cpp](src/http.cpp) / [src/http.hpp](src/http.hpp) | `requests` | HTTP GET 客户端（Windows 用 WinHTTP，其它平台用 `curl` 命令） |
+| [src/http.cpp](src/http.cpp) / [src/http.hpp](src/http.hpp) | `requests` | HTTP GET 客户端（Windows 用 WinHTTP，macOS/Linux 用 libcurl） |
+| [src/apppaths.cpp](src/apppaths.cpp) / [src/apppaths.hpp](src/apppaths.hpp) | — | 定位数据目录（exe 同目录 / 用户数据目录 / `TUFTOOLS_DATA_DIR`） |
 | [src/pyjson.hpp](src/pyjson.hpp) | `json`, `urllib.parse` | 基于 `nlohmann::ordered_json` 的 Python 语义薄适配层 |
 | [src/numfmt.hpp](src/numfmt.hpp) | f-string 格式化 | `format_fixed`、`trim_fixed`、`format_g` |
 | [src/console.hpp](src/console.hpp) | `input()` | UTF-8 控制台设置与输入封装 |
