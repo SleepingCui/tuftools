@@ -24,8 +24,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1 -Clean        # 
 ### macOS / Linux（GCC / Clang）
 
 ```bash
-# 依赖：编译器 + CMake + libcurl 开发头文件
-#   macOS  自带 libcurl，无需安装
+
 #   Debian/Ubuntu：sudo apt install cmake g++ libcurl4-openssl-dev
 #   Fedora：       sudo dnf install cmake gcc-c++ libcurl-devel
 
