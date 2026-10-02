@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1 -Clean        # 
 tuftools [--proxy VAR] [--verbose]
 ```
 
-`--proxy` 指定 HTTP(S) 代理，`--verbose` / `-v` 打印每个请求的详情。
+`--proxy` 指定 HTTP(S) 代理，`--verbose` / `-v` 打印每个请求的详情
 
 
 

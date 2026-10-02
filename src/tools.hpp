@@ -65,7 +65,10 @@ private:
 const std::vector<std::string>& jd_keys();
 const std::map<std::string, double>& jd_weights();
 double xacc_calc(const std::vector<long long>& judgements);
+// acc_decimals is the number of decimals the user typed for the target XACC; the
+// search window (and therefore the reported result) follows that precision.
 std::optional<std::map<std::string, long long>> xacc_reverse(double target_acc, long long total,
-                                                             const std::map<std::string, long long>& fixed_counts);
+                                                             const std::map<std::string, long long>& fixed_counts,
+                                                             int acc_decimals = 2);
 
 }  // namespace tuf

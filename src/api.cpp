@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -41,8 +42,55 @@ int start_request(const std::string& url) {
         g_span_start = Clock::now();
         if (!g_verbose) print_locked("查询中...");
     }
-    if (g_verbose) print_locked("#" + std::to_string(index) + " " + url);
+    if (g_verbose) {
+        std::string line = "#" + std::to_string(index) + " GET " + url;
+        if (!g_proxy.empty()) line += "  (proxy: " + g_proxy + ")";
+        print_locked(line);
+    }
     return index;
+}
+
+// Bodies can be large (a single passes page carries whole level objects), so keep
+// the verbose dump bounded; the real body size stays visible in the header line.
+constexpr std::size_t kMaxVerboseBody = 256 * 1024;
+
+// Renders a response body as an indented, line-numbered-free block that stays
+// readable inside the verbose stream: JSON is pretty-printed when it parses,
+// anything else (HTML error pages, plain text) is printed verbatim.
+std::string format_body_block(const std::string& body) {
+    if (body.empty()) return std::string();
+    std::string text;
+    bool pretty = false;
+    try {
+        Json parsed = Json::parse(body);
+        text = parsed.dump(2);
+        pretty = true;
+    } catch (const std::exception&) {
+        text = body;
+    }
+    bool truncated = false;
+    if (text.size() > kMaxVerboseBody) {
+        text.resize(kMaxVerboseBody);
+        truncated = true;
+    }
+
+    std::string out = "    | (" + std::string(pretty ? "JSON" : "原始文本") + ")\n";
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t nl = text.find('\n', start);
+        const std::string line =
+            (nl == std::string::npos) ? text.substr(start) : text.substr(start, nl - start);
+        out += "    | " + line;
+        if (!line.empty() && line.back() == '\r') out.pop_back();
+        out += '\n';
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+    if (truncated) {
+        out += "    | ... 已截断 (响应 " + std::to_string(body.size()) + " 字节)\n";
+    }
+    out.pop_back();  // print_locked() adds the final newline
+    return out;
 }
 
 Json get_once(const std::string& url) {
@@ -51,6 +99,18 @@ Json get_once(const std::string& url) {
     HttpResponse response;
     try {
         response = http_get(url, g_proxy, 30);
+    } catch (const HttpError& e) {
+        const Clock::time_point t1 = Clock::now();
+        g_span_end = t1;
+        g_api_us.fetch_add(static_cast<long long>(elapsed_ms(t0, t1) * 1000.0));
+        if (g_verbose) {
+            std::string line = "    <- #" + std::to_string(index) + " HTTP " + std::to_string(e.status()) +
+                               " 请求失败 " + e.what() + "  " + format_fixed(elapsed_ms(t0, t1), 2) + " ms";
+            const std::string block = format_body_block(e.body());
+            if (!block.empty()) line += "\n" + block;
+            print_locked(line);
+        }
+        throw;
     } catch (const std::exception& e) {
         const Clock::time_point t1 = Clock::now();
         g_span_end = t1;
@@ -63,8 +123,14 @@ Json get_once(const std::string& url) {
     const Clock::time_point t1 = Clock::now();
     g_span_end = t1;
     g_api_us.fetch_add(static_cast<long long>(elapsed_ms(t0, t1) * 1000.0));
-    log("    <- #" + std::to_string(index) + " " + std::to_string(response.status) + " " + response.reason + "  " +
-        format_fixed(elapsed_ms(t0, t1), 2) + " ms");
+    if (g_verbose) {
+        std::string line = "    <- #" + std::to_string(index) + " " + std::to_string(response.status) + " " +
+                           response.reason + "  " + format_fixed(elapsed_ms(t0, t1), 2) + " ms  " +
+                           std::to_string(response.body.size()) + " B";
+        const std::string block = format_body_block(response.body);
+        if (!block.empty()) line += "\n" + block;
+        print_locked(line);
+    }
 
     if (response.body.empty()) return Json();
     return Json::parse(response.body);

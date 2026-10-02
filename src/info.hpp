@@ -2,6 +2,7 @@
 // terminal width helpers used by the pass table.
 #pragma once
 
+#include <iosfwd>
 #include <map>
 #include <string>
 #include <vector>
@@ -61,7 +62,9 @@ void details(const Json& player, const std::map<std::string, RankVal>& ranks, co
 void run_player(const Json& player);
 void handle_player_lookup();
 
-std::string difficulty_name_of(const Json& sort_order);
+// Resolves the difficulty name of a pass row: prefers level.difficulty.name from
+// the passes payload itself, falls back to the /v2/database/difficulties table.
+std::string difficulty_name_of(const Json& level);
 
 int display_width(const std::string& text);
 std::string cut_width(const std::string& text, int width);
@@ -70,6 +73,9 @@ std::string right_justify(const std::string& text, int width);
 
 PassList fetch_player_passes(const std::string& name, const Json& player_id, long long limit = PASS_DISPLAY_LIMIT,
                              long long fetch_cap = 64);
+// Pass table. Columns are sized from their own content and 谱面 soaks up the
+// remaining `width` columns, so the layout adapts to the terminal.
+void print_passes_to(std::ostream& out, const std::vector<Json>& passes, long long total, int width);
 void print_passes(const std::vector<Json>& passes, long long total = 0);
 
 }  // namespace tuf

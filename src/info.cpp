@@ -82,8 +82,6 @@ std::vector<Utf8Unit> utf8_units(const std::string& text) {
     return units;
 }
 
-size_t codepoint_count(const std::string& text) { return utf8_units(text).size(); }
-
 std::string repeat(const std::string& unit, int times) {
     std::string out;
     for (int i = 0; i < times; ++i) out += unit;
@@ -119,8 +117,7 @@ std::string pad_width(const std::string& text, int width) {
 }
 
 std::string right_justify(const std::string& text, int width) {
-    const int len = static_cast<int>(codepoint_count(text));
-    const int pad = width - len;
+    const int pad = width - display_width(text);
     return repeat(" ", pad > 0 ? pad : 0) + text;
 }
 
@@ -361,30 +358,68 @@ void handle_player_lookup() {
 
 // --------------------------------------------------------- difficulty map ---
 
-std::string difficulty_name_of(const Json& sort_order) {
-    static bool loaded = false;
-    static std::map<std::string, std::string> names;
+namespace {
 
-    if (!loaded) {
-        loaded = true;
+// /v2/database/difficulties is only consulted as a fallback: passes normally
+// carry the whole difficulty object inline. The two keys MUST stay in separate
+// maps — a difficulty id can equal another difficulty's sortOrder (that is how
+// U1 used to render as U1J), so a single merged table would cross-talk.
+struct DifficultyTables {
+    std::map<std::string, std::string> by_id;
+    std::map<std::string, std::string> by_sort_order;
+};
+
+const DifficultyTables& difficulty_tables() {
+    static const DifficultyTables tables = [] {
+        DifficultyTables out;
         try {
             const Json list = fetchapi_sync(BASE_URL + "/v2/database/difficulties");
             if (list.is_array()) {
                 for (const Json& item : list.elements()) {
-                    if (!item.get("sortOrder").is_null()) {
-                        names[item.get("sortOrder").key_text()] = item.get("name").as_string();
-                    }
+                    const std::string name = item.get("name").as_string();
+                    if (name.empty()) continue;
+                    const Json& id = item.get("id");
+                    if (!id.is_null()) out.by_id[id.key_text()] = name;
+                    const Json& sort_order = item.get("sortOrder");
+                    if (!sort_order.is_null()) out.by_sort_order[sort_order.key_text()] = name;
                 }
             }
         } catch (const std::exception&) {
             // keep whatever was collected (mirrors the Python except-pass)
         }
-    }
+        return out;
+    }();
+    return tables;
+}
 
-    if (sort_order.is_null()) return "-";
-    auto it = names.find(sort_order.key_text());
-    if (it != names.end() && !it->second.empty()) return it->second;
-    return sort_order.key_text();
+std::string lookup_difficulty(const std::map<std::string, std::string>& table, const Json& key) {
+    if (key.is_null()) return std::string();
+    auto it = table.find(key.key_text());
+    if (it != table.end() && !it->second.empty()) return it->second;
+    return std::string();
+}
+
+}  // namespace
+
+std::string difficulty_name_of(const Json& level) {
+    const Json& difficulty = level.get("difficulty");
+
+    // Preferred path: the level already ships its difficulty object, so name it
+    // straight away and skip the /difficulties round trip entirely.
+    // NB: as_string() renders a missing value as the literal "null", hence the
+    // explicit is_string() check.
+    const Json& embedded = difficulty.get("name");
+    if (embedded.is_string() && !embedded.as_string().empty()) return embedded.as_string();
+
+    const DifficultyTables& tables = difficulty_tables();
+    std::string name = lookup_difficulty(tables.by_id, difficulty.get("id"));
+    if (name.empty()) name = lookup_difficulty(tables.by_id, level.get("diffId"));
+    if (name.empty()) name = lookup_difficulty(tables.by_sort_order, difficulty.get("sortOrder"));
+    if (!name.empty()) return name;
+
+    const Json& id = level.get("diffId");
+    if (id.is_null()) return "-";
+    return id.key_text();
 }
 
 // ----------------------------------------------------------------- passes ---
@@ -429,33 +464,87 @@ PassList fetch_player_passes(const std::string& name, const Json& player_id, lon
     return out;
 }
 
-void print_passes(const std::vector<Json>& passes, long long total) {
+namespace {
+
+std::string join_text(const std::vector<std::string>& parts, const std::string& separator) {
+    std::string out;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i) out += separator;
+        out += parts[i];
+    }
+    return out;
+}
+
+// Level credits arrive as level.levelCredits[] = {role, isOwner, creator:{name}}.
+// Charters are joined; a credit of any role is the fallback.
+std::string level_charter(const Json& level) {
+    std::vector<std::string> charters;
+    std::string first_credit;
+    for (const Json& credit : level.get("levelCredits").elements()) {
+        const Json& name_value = credit.get("creator").get("name");
+        if (!name_value.is_string() || name_value.as_string().empty()) continue;
+        const std::string name = name_value.as_string();
+        if (first_credit.empty()) first_credit = name;
+        if (credit.get("role").as_string() != "charter") continue;
+        if (std::find(charters.begin(), charters.end(), name) == charters.end()) charters.push_back(name);
+    }
+    if (!charters.empty()) return join_text(charters, ", ");
+    if (!first_credit.empty()) return first_credit;
+    const Json& legacy = level.get("creator").get("name");
+    return legacy.is_string() ? legacy.as_string() : std::string();
+}
+
+// "levelId - 名字 - 艺术家 - 关卡作者"; missing pieces are dropped.
+std::string level_heading(const Json& row) {
+    const Json& level = row.get("level");
+    const Json& level_id_value = row.get("levelId").is_null() ? level.get("id") : row.get("levelId");
+    const std::string level_id = level_id_value.is_null() ? std::string("?") : level_id_value.key_text();
+
+    const std::string name = level.get("song").is_string() ? level.get("song").as_string() : std::string();
+    std::vector<std::string> parts;
+    parts.push_back(level_id);
+    parts.push_back(name.empty() ? "谱面" : name);
+
+    const std::string artist = level.get("artist").as_string();
+    if (!artist.empty() && name.find(artist) == std::string::npos) parts.push_back(artist);
+
+    const std::string charter = level_charter(level);
+    if (!charter.empty()) parts.push_back(charter);
+
+    return join_text(parts, " - ");
+}
+
+}  // namespace
+
+void print_passes_to(std::ostream& out, const std::vector<Json>& passes, long long total, int width) {
     if (passes.empty()) return;
 
-    std::cout << std::endl;
-    std::cout << "通关谱面 (按分数降序，前 " << passes.size() << " 个";
-    if (total) {
-        std::cout << "，共匹配 " << total << " 条):";
-    } else {
-        std::cout << "):";
-    }
-    std::cout << std::endl;
-    std::cout << "   " << right_justify("分数", 11) << " " << right_justify("ACC", 9) << " " << pad_width("难度", 7)
-              << pad_width("谱面", 35) << "标签" << std::endl;
+    struct Row {
+        std::string index;
+        std::string score;
+        std::string acc;
+        std::string pass_id;
+        std::string difficulty;
+        std::string heading;
+        std::string tags;
+    };
 
-    size_t index = 0;
-    for (const Json& row : passes) {
-        ++index;
+    std::vector<Row> rows;
+    rows.reserve(passes.size());
+    for (size_t i = 0; i < passes.size(); ++i) {
+        const Json& row = passes[i];
         const Json& level = row.get("level");
-        std::string song = level.get("song").as_string();
-        if (song.empty()) song = "谱面 " + py_repr(row.get("levelId"));
-        const std::string artist = level.get("artist").as_string();
-        if (!artist.empty() && song.find(artist) == std::string::npos) song = song + " - " + artist;
+
+        Row entry;
+        entry.index = std::to_string(i + 1);
 
         const Json& score = row.get("scoreV2");
-        const std::string score_text = score.is_number() ? trim_fixed(score.as_double(), 2) : std::string("-");
+        entry.score = score.is_number() ? trim_fixed(score.as_double(), 2) : std::string("-");
         const Json& acc = row.get("accuracy");
-        const std::string acc_text = acc.is_number() ? format_fixed(acc.as_double() * 100.0, 4) + "%" : std::string("-");
+        entry.acc = acc.is_number() ? format_fixed(acc.as_double() * 100.0, 4) + "%" : std::string("-");
+        entry.pass_id = row.get("id").is_null() ? std::string("-") : row.get("id").key_text();
+        entry.difficulty = difficulty_name_of(level);
+        entry.heading = level_heading(row);
 
         std::vector<std::string> tags;
         if (row.get("isWorldsFirst").truthy()) tags.push_back("世界首通");
@@ -471,17 +560,70 @@ void print_passes(const std::vector<Json>& passes, long long total) {
         if (row.get("isWrongJudgement").truthy()) tags.push_back("判定异常");
         if (row.get("is12K").truthy()) tags.push_back("12K");
         else if (row.get("is16K").truthy()) tags.push_back("16K");
+        entry.tags = join_text(tags, " ");
 
-        std::string tag_text;
-        for (size_t i = 0; i < tags.size(); ++i) {
-            if (i) tag_text += " ";
-            tag_text += tags[i];
-        }
-
-        std::cout << right_justify(std::to_string(index), 3) << " " << right_justify(score_text, 10) << " "
-                  << right_justify(acc_text, 9) << " " << pad_width(difficulty_name_of(level.get("diffId")), 7)
-                  << pad_width(cut_width(song, 34), 35) << tag_text << std::endl;
+        rows.push_back(std::move(entry));
     }
+
+    // Adaptive layout: the narrow columns are sized from their own content, and
+    // 谱面 soaks up what the terminal has left -- but never wider than
+    // kMaxLevelWidth (longer level descriptions end with …) and never narrower
+    // than kMinLevelWidth (a very narrow window overflows instead of mangling
+    // the titles).
+    constexpr int kMinLevelWidth = 24;
+    constexpr int kMaxLevelWidth = 60;
+    int index_width = 2;
+    int score_width = display_width("分数");
+    int acc_width = display_width("ACC");
+    int id_width = display_width("ID");
+    int difficulty_width = display_width("难度");
+    int tag_width = display_width("标签");
+    int natural_level_width = display_width("谱面");
+    for (const Row& entry : rows) {
+        index_width = std::max(index_width, display_width(entry.index));
+        score_width = std::max(score_width, display_width(entry.score));
+        acc_width = std::max(acc_width, display_width(entry.acc));
+        id_width = std::max(id_width, display_width(entry.pass_id));
+        difficulty_width = std::max(difficulty_width, display_width(entry.difficulty));
+        tag_width = std::max(tag_width, display_width(entry.tags));
+        natural_level_width = std::max(natural_level_width, display_width(entry.heading));
+    }
+
+    // Six single-space separators between the seven columns.
+    const int fixed_width = index_width + score_width + acc_width + id_width + difficulty_width + tag_width + 6;
+    const int available = std::max(kMinLevelWidth, width - 1 - fixed_width);
+    const int level_width =
+        std::max(kMinLevelWidth, std::min(available, std::min(natural_level_width, kMaxLevelWidth)));
+
+    out << std::endl;
+    out << "通关谱面 (按分数降序，前 " << passes.size() << " 个";
+    if (total) {
+        out << "，共匹配 " << total << " 条):";
+    } else {
+        out << "):";
+    }
+    out << std::endl;
+
+    out << std::string(static_cast<size_t>(index_width), ' ') << " " << right_justify("分数", score_width) << " "
+        << right_justify("ACC", acc_width) << " " << right_justify("ID", id_width) << " "
+        << pad_width("难度", difficulty_width) << " " << pad_width("谱面", level_width) << " 标签" << std::endl;
+
+    for (const Row& entry : rows) {
+        out << right_justify(entry.index, index_width) << " " << right_justify(entry.score, score_width) << " "
+            << right_justify(entry.acc, acc_width) << " " << right_justify(entry.pass_id, id_width) << " "
+            << pad_width(entry.difficulty, difficulty_width) << " ";
+        if (entry.tags.empty()) {
+            // No tag column on this row: skip the padding so the line has no trailing spaces.
+            out << cut_width(entry.heading, level_width);
+        } else {
+            out << pad_width(cut_width(entry.heading, level_width), level_width) << " " << entry.tags;
+        }
+        out << std::endl;
+    }
+}
+
+void print_passes(const std::vector<Json>& passes, long long total) {
+    print_passes_to(std::cout, passes, total, terminal_width());
 }
 
 }  // namespace tuf

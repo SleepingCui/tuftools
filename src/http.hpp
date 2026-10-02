@@ -4,6 +4,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace tuf {
 
@@ -15,12 +16,15 @@ struct HttpResponse {
 
 class HttpError : public std::runtime_error {
 public:
-    HttpError(const std::string& message, int status)
-        : std::runtime_error(message), status_(status) {}
+    HttpError(const std::string& message, int status, std::string body = std::string())
+        : std::runtime_error(message), status_(status), body_(std::move(body)) {}
     int status() const { return status_; }
+    // Error payload as returned by the server; useful for diagnostics (verbose log).
+    const std::string& body() const { return body_; }
 
 private:
     int status_;
+    std::string body_;
 };
 
 // Throws std::runtime_error on transport failure, HttpError on status >= 400.

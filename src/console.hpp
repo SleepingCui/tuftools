@@ -13,6 +13,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+#include <sys/ioctl.h>
+#include <unistd.h>
 #endif
 
 namespace tuf {
@@ -24,6 +27,23 @@ inline void setup_console_utf8() {
 #endif
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
+}
+
+// Best-effort terminal width, used to lay out adaptive tables. Falls back to
+// `fallback` when stdout is not a console (piped or redirected output).
+inline int terminal_width(int fallback = 120) {
+#ifdef _WIN32
+    const HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(handle, &info)) {
+        const int width = static_cast<int>(info.srWindow.Right - info.srWindow.Left) + 1;
+        if (width > 0) return width;
+    }
+#else
+    struct winsize size {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0) return static_cast<int>(size.ws_col);
+#endif
+    return fallback;
 }
 
 inline std::string trim(const std::string& s) {

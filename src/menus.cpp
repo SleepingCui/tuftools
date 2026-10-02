@@ -304,7 +304,8 @@ void acc_run2() {
         std::cout << "invalid literal for int() with base 10" << std::endl;
         return;
     }
-    const std::optional<double> target_parsed = try_parse_double(read_trimmed("XACC: "));
+    const std::string target_text = read_trimmed("XACC: ");
+    const std::optional<double> target_parsed = try_parse_double(target_text);
     if (!target_parsed.has_value()) {
         std::cout << "could not convert string to float" << std::endl;
         return;
@@ -312,6 +313,9 @@ void acc_run2() {
 
     const long long total = *total_parsed;
     const double target_acc = *target_parsed;
+    // The decimals the user typed define the required precision (search window, and whether
+    // the result counts as exact).  The result is always printed at its true accuracy.
+    const int acc_decimals = std::min(6, decimal_places_of(target_text));
 
     if (target_acc < 0.0 || target_acc > 100.0) {
         std::cout << "XACC 范围是 0.0% ~ 100.0%" << std::endl;
@@ -333,7 +337,8 @@ void acc_run2() {
 
     std::cout << "正在计算...这可能需要一些时间" << std::endl;
     const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-    const std::optional<std::map<std::string, long long>> result = xacc_reverse(target_acc, total, fixed_counts);
+    const std::optional<std::map<std::string, long long>> result =
+        xacc_reverse(target_acc, total, fixed_counts, acc_decimals);
     const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     const double elapsed =
         std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start).count();
@@ -350,14 +355,21 @@ void acc_run2() {
             std::cout << " " << pad_right(key, 10) << ": " << value << " " << status << std::endl;
         }
 
-        double weighted_sum = 0.0;
+        // 1 weight unit = 0.05 score = 5/total percent. Sum the units as integers so the
+        // printed value is the true accuracy of the split, not accumulated float noise.
+        long long score_units = 0;
         for (const std::string& key : keys) {
             auto it = counts.find(key);
             const long long value = it == counts.end() ? 0 : it->second;
-            weighted_sum += static_cast<double>(value) * jd_weights().at(key);
+            score_units += value * std::llround(jd_weights().at(key) * 20.0);
         }
-        const double actual_acc = (weighted_sum / static_cast<double>(total)) * 100.0;
-        std::cout << std::endl << " XACC: " << py_float_str(actual_acc) << "%" << std::endl;
+        const double actual_acc = static_cast<double>(score_units) * 5.0 / static_cast<double>(total);
+        std::cout << std::endl << " XACC: " << py_float_str(actual_acc) << "%";
+        if (format_fixed(actual_acc, acc_decimals) != format_fixed(target_acc, acc_decimals)) {
+            std::cout << "  (该物量下无法精确到小数点后 " << acc_decimals << " 位，以上为最接近 " << format_fixed(target_acc, acc_decimals)
+                      << "% 的可达值)";
+        }
+        std::cout << std::endl;
     }
     std::cout << " Elapsed " << py_float_str(elapsed) << " ms" << std::endl;
 }

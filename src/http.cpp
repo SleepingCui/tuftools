@@ -167,7 +167,7 @@ HttpResponse http_get(const std::string& url, const std::string& proxy, int time
 
     if (response.status >= 400) {
         throw HttpError("HTTP " + std::to_string(response.status) + " " + response.reason + " for url: " + url,
-                        response.status);
+                        response.status, response.body);
     }
     return response;
 }
@@ -252,7 +252,7 @@ HttpResponse http_get(const std::string& url, const std::string& proxy, int time
 
     if (response.status >= 400) {
         throw HttpError("HTTP " + std::to_string(response.status) + " " + response.reason + " for url: " + url,
-                        response.status);
+                        response.status, response.body);
     }
     return response;
 }
