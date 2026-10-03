@@ -15,6 +15,7 @@
 #include "pyjson.hpp"
 #include "numfmt.hpp"
 #include "tools.hpp"
+#include "xacc_solver.hpp"
 
 namespace tuf {
 
@@ -273,9 +274,79 @@ const std::vector<std::string>& xacc_keys(bool xperfect) { return jd_keys(xperfe
 // set (and therefore the number of values the user types) changes with the mode.
 bool ask_xperfect_mode() { return lower_ascii(read_trimmed("是否启用 XPerfect? (y/N): ")) == "y"; }
 
+// Session-wide solver choice for the reverse search; `automatic` picks the exact
+// dense DP for small inputs and branch-and-bound for large ones.
+XaccSolver g_acc_solver = XaccSolver::automatic;
+
+// Loads the configuration once per operation.  Returns false and prints the reason
+// when the model cannot be built.
+bool acc_load_model(XaccModel& model) {
+    std::string error;
+    std::string note;
+    if (!xacc_model_load(model, error, &note)) {
+        std::cout << "读取配置失败: " << error << std::endl;
+        return false;
+    }
+    if (!note.empty()) std::cout << note << std::endl;
+    return true;
+}
+
+// Prompt loop for the difficulty coefficients.  They live in xacc.json as exact
+// integer units, so the edit round-trips exactly.  Judgement weights are NOT part
+// of this: they are the fixed game rule that defines XACC.
+bool acc_edit_units(XaccModel& model) {
+    bool modified = false;
+
+    for (const std::string& key : model.order) {
+        const std::string current = xacc_format_cost(model, key);
+        const std::string value = read_trimmed(key + " [" + current + "]: ");
+        if (value.empty()) continue;
+
+        const std::optional<double> parsed = try_parse_double(value);
+        if (!parsed.has_value()) {
+            std::cout << "输入无效，" << key << " 保持原值" << std::endl;
+            continue;
+        }
+        std::int64_t units = 0;
+        bool exact = false;
+        if (!xacc_units_from_value(*parsed, model.cost_scale, units, exact) || !exact) {
+            std::cout << "输入无效，无法用 1/" << model.cost_scale << " 的精度表示: " << value << std::endl;
+            continue;
+        }
+        if (units < 0) {
+            std::cout << "难度系数不能为负数" << std::endl;
+            continue;
+        }
+        model.cost_units[key] = units;
+        modified = true;
+    }
+    return modified;
+}
+
+void acc_choose_solver() {
+    const std::vector<XaccSolver>& available = xacc_solver_all();
+    std::cout << std::endl << "当前求解器: " << xacc_solver_text(g_acc_solver) << std::endl;
+    for (size_t i = 0; i < available.size(); ++i) {
+        std::cout << "  " << (i + 1) << ". " << xacc_solver_text(available[i]) << std::endl;
+    }
+
+    const std::string value = read_trimmed("选择求解器 (回车保持不变): ");
+    if (value.empty()) return;
+    XaccSolver chosen = g_acc_solver;
+    if (!xacc_solver_from_text(value, chosen)) {
+        std::cout << "无效选择" << std::endl;
+        return;
+    }
+    g_acc_solver = chosen;
+    std::cout << "已设为 " << xacc_solver_text(g_acc_solver) << std::endl;
+}
+
 void acc_run1() {
     const bool xperfect = ask_xperfect_mode();
     const std::vector<std::string>& keys = xacc_keys(xperfect);
+
+    XaccModel model;
+    if (!acc_load_model(model)) return;
 
     std::cout << "输入格式: "
               << (xperfect ? "failMiss tooEarly early EPerfect +perfect xperfect -perfect LPerfect late"
@@ -301,11 +372,32 @@ void acc_run1() {
             std::cout << "请输入整数" << std::endl;
             return;
         }
+        if (*parsed < 0) {
+            std::cout << "判定数量不能为负数" << std::endl;
+            return;
+        }
         judgements.push_back(*parsed);
     }
 
+    // Sum in integer score units, so the printed value is exact rather than the
+    // accumulated float noise of summing decimal weights.
+    XaccCount total = 0;
+    XaccScoreUnit weighted = 0;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        total += judgements[i];
+        std::int64_t term = 0;
+        if (!mul_checked(model.weight(keys[i]), judgements[i], term) || !add_checked(weighted, term, weighted)) {
+            std::cout << "数值超出可计算范围" << std::endl;
+            return;
+        }
+    }
+    if (total == 0) {
+        std::cout << "物量为 0，无法计算 XACC" << std::endl;
+        return;
+    }
+
     std::cout << std::endl;
-    std::cout << "XACC: " << py_float_str(xacc_calc(judgements, xperfect) * 100.0) << "%" << std::endl;
+    std::cout << "XACC: " << py_float_str(xacc_acc_percent(weighted, total, model)) << "%" << std::endl;
 }
 
 void acc_run2() {
@@ -317,23 +409,24 @@ void acc_run2() {
         std::cout << "invalid literal for int() with base 10" << std::endl;
         return;
     }
-    const std::string target_text = read_trimmed("XACC: ");
-    const std::optional<double> target_parsed = try_parse_double(target_text);
-    if (!target_parsed.has_value()) {
-        std::cout << "could not convert string to float" << std::endl;
-        return;
-    }
-
     const long long total = *total_parsed;
-    const double target_acc = *target_parsed;
-    // The decimals the user typed define the required precision (search window, and whether
-    // the result counts as exact).  The result is always printed at its true accuracy.
-    const int acc_decimals = std::min(6, decimal_places_of(target_text));
-
-    if (target_acc < 0.0 || target_acc > 100.0) {
-        std::cout << "XACC 范围是 0.0% ~ 100.0%" << std::endl;
+    if (total <= 0) {
+        std::cout << "物量必须大于 0" << std::endl;
         return;
     }
+
+    // The target is parsed as an exact decimal (never through a double), so the
+    // search window is exactly the set of accuracies that round to what was typed.
+    const std::string target_text = read_trimmed("XACC: ");
+    XaccTarget target;
+    std::string error;
+    if (!xacc_parse_target(target_text, target, error)) {
+        std::cout << error << std::endl;
+        return;
+    }
+
+    XaccModel model;
+    if (!acc_load_model(model)) return;
 
     std::map<std::string, long long> fixed_counts;
     for (const std::string& key : keys) {
@@ -344,82 +437,75 @@ void acc_run2() {
             std::cout << "已跳过固定 " << key << std::endl;
             continue;
         }
+        if (*parsed < 0) {
+            std::cout << "已跳过固定 " << key << " (数量不能为负数)" << std::endl;
+            continue;
+        }
         fixed_counts[key] = *parsed;
     }
 
     std::cout << "正在计算...这可能需要一些时间" << std::endl;
-    const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-    const std::optional<std::map<std::string, long long>> result =
-        xacc_reverse(target_acc, total, fixed_counts, acc_decimals, xperfect);
-    const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    const double elapsed =
-        std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start).count();
+    std::cout << "求解器: " << xacc_solver_text(g_acc_solver) << std::endl;
+
+    XaccReverseOptions options;
+    options.solver = g_acc_solver;
+    const XaccReverseResult result = xacc_reverse_search(model, target, total, fixed_counts, xperfect, options);
 
     std::cout << std::endl;
-    if (!result.has_value()) {
-        std::cout << "无法达成该目标 XACC" << std::endl;
+    if (!result.ok()) {
+        std::cout << "无法达成该目标 XACC: " << result.message << std::endl;
     } else {
-        const std::map<std::string, long long>& counts = *result;
         for (const std::string& key : keys) {
             const std::string status = fixed_counts.count(key) ? "(Locked)" : "";
-            auto it = counts.find(key);
-            const long long value = it == counts.end() ? 0 : it->second;
+            auto it = result.counts.find(key);
+            const long long value = it == result.counts.end() ? 0 : it->second;
             std::cout << " " << pad_right(key, 10) << ": " << value << " " << status << std::endl;
         }
 
-        // 1 weight unit = 0.05 score = 5/total percent. Sum the units as integers so the
-        // printed value is the true accuracy of the split, not accumulated float noise.
-        long long score_units = 0;
-        for (const std::string& key : keys) {
-            auto it = counts.find(key);
-            const long long value = it == counts.end() ? 0 : it->second;
-            score_units += value * std::llround(jd_weights(xperfect).at(key) * 20.0);
+        // Show the accuracy the split really reaches instead of rounding it to the
+        // decimals the user typed: 99.29 tells nothing about being 24 score units
+        // short, while 99.289973 does.  Never print fewer decimals than the input.
+        constexpr int kAccDisplayDecimals = 6;
+        const double achieved_acc = xacc_acc_percent(result.score_units, total, model);
+        std::string achieved_text = trim_fixed(achieved_acc, kAccDisplayDecimals);
+        if (decimal_places_of(achieved_text) < target.decimals) {
+            achieved_text = format_fixed(achieved_acc, target.decimals);
         }
-        const double actual_acc = static_cast<double>(score_units) * 5.0 / static_cast<double>(total);
-        std::cout << std::endl << " XACC: " << py_float_str(actual_acc) << "%";
-        if (format_fixed(actual_acc, acc_decimals) != format_fixed(target_acc, acc_decimals)) {
-            std::cout << "  (该物量下无法精确到小数点后 " << acc_decimals << " 位，以上为最接近 " << format_fixed(target_acc, acc_decimals)
-                      << "% 的可达值)";
+
+        std::cout << std::endl << " XACC: " << achieved_text << "%";
+        if (!result.exact) {
+            std::cout << "  (该物量下无法精确到小数点后 " << target.decimals << " 位，以上为最接近的可达值)";
         }
         std::cout << std::endl;
+        std::cout << " 求解器 " << xacc_solver_text(result.solver) << "，与目标相差 " << result.distance_units
+                  << " 个分数单位，难度系数合计 " << result.cost_units << std::endl;
+        std::cout << " 节点 " << result.nodes << "，剪枝 " << result.pruned << "，状态 " << result.states << std::endl;
+        if (!result.message.empty()) std::cout << " " << result.message << std::endl;
+        if (!result.note.empty()) std::cout << " " << result.note << std::endl;
     }
-    std::cout << " Elapsed " << py_float_str(elapsed) << " ms" << std::endl;
+    std::cout << " Elapsed " << py_float_str(result.elapsed_ms) << " ms" << std::endl;
 }
 
 void acc_run3() {
-    std::map<std::string, double> current_costs = costs_load();
+    XaccModel model;
+    if (!acc_load_model(model)) return;
 
     std::cout << "当前各判定难度系数 (数值越低，算法越倾向于用它凑分):" << std::endl;
-    for (const std::string& key : jd_cost_keys()) {
-        auto it = current_costs.find(key);
-        const double value = it == current_costs.end() ? 0.0 : it->second;
-        std::cout << "  " << pad_right(key, 10) << ": " << py_float_str(value) << std::endl;
+    for (const std::string& key : model.order) {
+        std::cout << "  " << pad_right(key, 10) << ": " << xacc_format_cost(model, key) << std::endl;
     }
 
-    std::cout << std::endl << "请输入新系数 (直接回车保持不变):" << std::endl;
-    bool modified = false;
-    for (const std::string& key : jd_cost_keys()) {
-        auto it = current_costs.find(key);
-        const double current = it == current_costs.end() ? 0.0 : it->second;
-        const std::string value = read_trimmed(key + " [" + py_float_str(current) + "]: ");
-        if (!value.empty()) {
-            const std::optional<double> parsed = try_parse_double(value);
-            if (!parsed.has_value()) {
-                std::cout << "输入无效，" << key << " 保持原值: could not convert string to float: '" << value << "'"
-                          << std::endl;
-                continue;
-            }
-            current_costs[key] = *parsed;
-            modified = true;
-        }
+    std::cout << std::endl << "请输入新系数 (回车保持不变):" << std::endl;
+    if (!acc_edit_units(model)) {
+        std::cout << "Not modified" << std::endl;
+        return;
     }
 
-    std::cout << std::endl;
-    if (modified) {
-        costs_save(current_costs);
+    std::string error;
+    if (xacc_model_save(model, error)) {
         std::cout << "保存成功" << std::endl;
     } else {
-        std::cout << "Not modified" << std::endl;
+        std::cout << "保存失败: " << error << std::endl;
     }
 }
 
@@ -432,6 +518,7 @@ void handle_acc_calc() {
         std::cout << "1. 根据判定计算 XACC" << std::endl;
         std::cout << "2. 根据 XACC 推算判定" << std::endl;
         std::cout << "3. 自定义难度系数" << std::endl;
+        std::cout << "4. 选择求解器 (当前: " << xacc_solver_text(g_acc_solver) << ")" << std::endl;
         std::cout << "b. 返回主菜单" << std::endl;
 
         const std::string choice = read_trimmed("> ");
@@ -442,6 +529,8 @@ void handle_acc_calc() {
             acc_run2();
         } else if (choice == "3") {
             acc_run3();
+        } else if (choice == "4") {
+            acc_choose_solver();
         } else if (choice == "b") {
             break;
         } else {

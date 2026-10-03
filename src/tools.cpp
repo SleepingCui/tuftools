@@ -1,4 +1,4 @@
-#include "tools.hpp"
+﻿#include "tools.hpp"
 
 #include <cmath>
 #include <fstream>
@@ -6,10 +6,18 @@
 #include <sstream>
 #include <stdexcept>
 
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
 #include "api.hpp"
 #include "apppaths.hpp"
 #include "console.hpp"
 #include "numfmt.hpp"
+#include "xacc_model.hpp"
+#include "xacc_solver.hpp"
 
 namespace tuf {
 
@@ -267,281 +275,77 @@ Json TUFScoreCalculator::calculate_score(const Json& level_data, double accuracy
 }
 
 // =========================================================== XACCTools =====
-
-// XPerfect: the single `perfect` judgement is reported by the game as +perfect,
-// -perfect or xperfect.  Their XACC weight is identical to perfect's, so a run
-// scores exactly the same in both modes; only the reverse search distinguishes
-// them (they carry their own costs, see jd_cost_keys()).
-// The judgement list and the weight tables themselves live in weights.cpp.
+// These two functions are thin compatibility wrappers around the exact integer
+// model in xacc_model.hpp / xacc_solver.hpp.  New code should load one XaccModel
+// per operation and call the model-aware overloads directly.
 
 double xacc_calc(const std::vector<long long>& judgements, bool xperfect) {
+    XaccModel model;
+    std::string error;
+    if (!xacc_model_load(model, error)) {
+        log("[XACC] 读取配置失败: " + error);
+        return 0.0;
+    }
+    return xacc_calc(model, judgements, xperfect);
+}
+
+double xacc_calc(const XaccModel& model, const std::vector<long long>& judgements, bool xperfect) {
     const std::vector<std::string>& keys = jd_keys(xperfect);
     if (judgements.size() != keys.size()) return 0.0;
-    long long total = 0;
-    for (long long value : judgements) total += value;
-    if (total == 0) return 0.0;
 
-    const std::map<std::string, double>& weights = jd_weights(xperfect);
-    double weighted_sum = 0.0;
-    for (size_t i = 0; i < keys.size(); ++i) weighted_sum += static_cast<double>(judgements[i]) * weights.at(keys[i]);
-    return weighted_sum / static_cast<double>(total);
+    XaccCount total = 0;
+    XaccScoreUnit weighted = 0;
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        if (judgements[i] < 0) return 0.0;
+        total += judgements[i];
+        std::int64_t term = 0;
+        if (!mul_checked(model.weight(keys[i]), judgements[i], term)) return 0.0;
+        if (!add_checked(weighted, term, weighted)) return 0.0;
+    }
+    if (total == 0) return 0.0;
+    return xacc_acc_percent(weighted, total, model) / 100.0;
 }
 
 std::optional<std::map<std::string, long long>> xacc_reverse(double target_acc, long long total,
                                                              const std::map<std::string, long long>& fixed_counts,
                                                              int acc_decimals, bool xperfect) {
-    const std::map<std::string, double> costs_dict = costs_load();
-    const std::vector<std::string>& keys = jd_keys(xperfect);
-    const std::map<std::string, double>& weights = jd_weights(xperfect);
-
-    std::map<std::string, long long> weight_units;
-    for (const std::string& key : keys) {
-        weight_units[key] = static_cast<long long>(std::llround(weights.at(key) * 20.0));
-    }
-
-    // Result precision follows the decimals the user typed for the target XACC:
-    // "99.28" accepts anything that still rounds to 99.28 (target ± 0.005).  Among all
-    // reachable accuracies the search therefore prefers the one closest to the value the
-    // user typed, and only then the cheapest judgement split.
-    // Reachable accuracies are not dense (judgements are weighted in 0.05 units, and a
-    // note only loses whole weight units), so the search window is widened by 0.4 score
-    // points on both sides: a small chart can then answer with the nearest reachable
-    // value instead of giving up.  The window is capped so the DP state space stays
-    // bounded on huge 物量 inputs.
-    const int decimals = std::min(6, std::max(0, acc_decimals));
-    const double precision_tolerance = 0.5 * std::pow(10.0, -decimals);
-    constexpr double kMaxWindowLossUnits = 4096.0;
-    const double extra_slack = total > 0 ? 0.4 / static_cast<double>(total) * 100.0 : 0.0;
-    const double window_cap = total > 0 ? (kMaxWindowLossUnits / 20.0) / static_cast<double>(total) * 100.0 : 0.0;
-    double tolerant_percent = std::max(precision_tolerance, extra_slack);
-    if (window_cap > 0.0) tolerant_percent = std::min(tolerant_percent, window_cap);
-    const double eps = 1e-9;
-
-    const auto fail = [](const std::string& reason) -> std::optional<std::map<std::string, long long>> {
-        log("[XACCreverse] 无解: " + reason);
+    XaccModel model;
+    std::string error;
+    if (!xacc_model_load(model, error)) {
+        log("[XACCreverse] 读取配置失败: " + error);
         return std::nullopt;
-    };
-
-    {
-        std::string fixed_text = "{";
-        bool first = true;
-        for (const auto& kv : fixed_counts) {
-            if (!first) fixed_text += ", ";
-            first = false;
-            fixed_text += "'" + kv.first + "': " + std::to_string(kv.second);
-        }
-        fixed_text += "}";
-        log("[XACCreverse] 开始: target=" + format_fixed(target_acc, 6) + "%, total=" + std::to_string(total) +
-            ", fixed=" + fixed_text);
-        log("[XACCreverse] 精度: 目标小数点后 " + std::to_string(decimals) + " 位 -> 采纳窗口 ±" +
-            format_fixed(precision_tolerance, 6) + "%, 搜索窗口 ±" + format_fixed(tolerant_percent, 6) + "%");
+    }
+    if (total < 0) {
+        log("[XACCreverse] 无解: 物量不能为负数");
+        return std::nullopt;
+    }
+    if (!(target_acc >= 0.0) || target_acc > 100.0) {
+        log("[XACCreverse] 无解: 目标 XACC 必须落在 0 到 100 之间");
+        return std::nullopt;
     }
 
-    if (total < 0 || target_acc < 0.0 || target_acc > 100.0) {
-        return fail("total 或 target_acc 超出范围");
+    const int decimals = std::min(6, std::max(0, acc_decimals));
+    // The double entry point only survives for compatibility; render it back to a
+    // decimal string first so the exact parser (not the double) decides the window.
+    const std::string text = format_fixed(target_acc, decimals);
+    XaccTarget target;
+    if (!xacc_parse_target(text, target, error)) {
+        log("[XACCreverse] 目标无效: " + error);
+        return std::nullopt;
     }
 
-    std::map<std::string, long long> result;
-    for (const std::string& key : keys) result[key] = 0;
-
-    long long rem_notes = total;
-    long long fixed_score_units = 0;
-    double fixed_cost = 0.0;
-
-    for (const std::string& key : keys) {
-        auto it = fixed_counts.find(key);
-        if (it == fixed_counts.end()) continue;
-        const long long val = it->second;
-        if (val < 0 || val > rem_notes) return fail("固定数量无效: " + key + "=" + std::to_string(val));
-        result[key] = val;
-        rem_notes -= val;
-        fixed_score_units += val * weight_units[key];
-        fixed_cost += static_cast<double>(val) * costs_dict.at(key);
+    const XaccReverseResult result = xacc_reverse_search(model, target, total, fixed_counts, xperfect);
+    if (!result.ok()) {
+        log("[XACCreverse] 无解: " + result.message);
+        return std::nullopt;
     }
-
-    std::vector<std::string> free_keys;
-    for (const std::string& key : keys) {
-        if (!fixed_counts.count(key)) free_keys.push_back(key);
+    for (const auto& entry : result.counts) {
+        log("[XACCreverse] " + entry.first + "=" + std::to_string(entry.second));
     }
-    if (rem_notes && free_keys.empty()) {
-        return fail("剩余物量大于 0，但没有可用的非固定判定");
-    }
-
-    const double min_score = (target_acc - tolerant_percent) / 100.0 * static_cast<double>(total);
-    const double max_score = (target_acc + tolerant_percent) / 100.0 * static_cast<double>(total);
-    log("[XACCreverse] fixed_score=" + format_fixed(static_cast<double>(fixed_score_units) / 20.0, 4) +
-        ", remaining=" + std::to_string(rem_notes) + ", target_range=[" + format_fixed(min_score, 6) + ", " +
-        format_fixed(max_score, 6) + "]");
-
-    if (!rem_notes) {
-        const double actual = static_cast<double>(fixed_score_units) / 20.0;
-        if (min_score - eps <= actual && actual <= max_score + eps) {
-            log("[XACCreverse] 固定判定已满足目标: score=" + format_fixed(actual, 6));
-            return result;
-        }
-        return fail("固定判定分数 " + format_fixed(actual, 6) + " 不在目标区间");
-    }
-
-    // Same-weight judgements lose no score; use the cheapest one as the base.
-    long long max_weight = 0;
-    for (const std::string& key : free_keys) max_weight = std::max(max_weight, weight_units[key]);
-
-    std::string base_key = free_keys.front();
-    double base_cost = costs_dict.at(base_key);
-    bool base_found = false;
-    for (const std::string& key : free_keys) {
-        if (weight_units[key] != max_weight) continue;
-        const double cost = costs_dict.at(key);
-        if (!base_found || cost < base_cost) {
-            base_found = true;
-            base_key = key;
-            base_cost = cost;
-        }
-    }
-    const double base_score_units = static_cast<double>(fixed_score_units) + static_cast<double>(rem_notes) * static_cast<double>(max_weight);
-    // Loss (in 0.05 units) that would hit the requested accuracy exactly.
-    const double ideal_loss = base_score_units - (target_acc / 100.0) * static_cast<double>(total) * 20.0;
-
-    long long loss_min = static_cast<long long>(std::ceil((base_score_units / 20.0 - max_score) * 20.0 - eps));
-    long long loss_max = static_cast<long long>(std::floor((base_score_units / 20.0 - min_score) * 20.0 + eps));
-    loss_min = std::max<long long>(0, loss_min);
-    log("[XACCreverse] base=" + base_key + ", base_score=" + format_fixed(base_score_units / 20.0, 4) +
-        ", loss_range=[" + std::to_string(loss_min) + ", " + std::to_string(loss_max) + "] (单位=0.05)");
-    if (loss_min > loss_max) return fail("最高可达分数也低于目标区间");
-
-    // Judgements with equal loss are interchangeable: keep only the cheapest one.
-    std::map<long long, std::pair<std::string, double>> loss_item_map;
-    for (const std::string& key : free_keys) {
-        const long long item_loss = max_weight - weight_units[key];
-        if (item_loss <= 0) continue;
-        const double item_cost = costs_dict.at(key) - base_cost;
-        auto it = loss_item_map.find(item_loss);
-        if (it == loss_item_map.end() || item_cost < it->second.second) {
-            loss_item_map[item_loss] = {key, item_cost};
-        }
-    }
-
-    struct LossItem {
-        std::string key;
-        long long loss;
-        double cost;
-    };
-    std::vector<LossItem> loss_items;
-    for (const auto& kv : loss_item_map) {
-        loss_items.push_back(LossItem{kv.second.first, kv.first, kv.second.second});
-    }
-
-    {
-        std::string text = "[";
-        for (size_t i = 0; i < loss_items.size(); ++i) {
-            if (i) text += ", ";
-            text += "('" + loss_items[i].key + "', " + std::to_string(loss_items[i].loss) + ", " +
-                    format_fixed(loss_items[i].cost, 4) + ")";
-        }
-        text += "]";
-        log("[XACCreverse] loss_items=" + text);
-    }
-
-    if (loss_items.empty()) {
-        if (loss_min <= 0 && 0 <= loss_max) {
-            result[base_key] += rem_notes;
-            log("[XACCreverse] 无需替换，全部使用 " + base_key);
-            return result;
-        }
-        return fail("没有可用于降低分数的判定");
-    }
-
-    struct State {
-        double cost = 0.0;
-        std::vector<long long> layout;
-    };
-    struct Best {
-        double cost = 0.0;
-        long long used = 0;
-        long long loss = 0;
-        std::vector<long long> layout;
-    };
-
-    std::map<long long, State> current;
-    current[0] = State{0.0, std::vector<long long>(loss_items.size(), 0)};
-
-    std::map<long long, Best> candidates;
-    if (loss_min <= 0 && 0 <= loss_max) {
-        Best candidate;
-        candidate.cost = fixed_cost + static_cast<double>(rem_notes) * base_cost;
-        candidate.used = 0;
-        candidate.loss = 0;
-        candidate.layout = std::vector<long long>(loss_items.size(), 0);
-        candidates[0] = candidate;
-    }
-
-    const long long progress_step = std::max<long long>(1, rem_notes / 10);
-    for (long long count = 0; count < rem_notes; ++count) {
-        if (current.empty()) continue;
-
-        std::map<long long, State> next_states;
-        for (const auto& entry : current) {
-            for (size_t i = 0; i < loss_items.size(); ++i) {
-                const long long new_loss = entry.first + loss_items[i].loss;
-                if (new_loss > loss_max) continue;
-                std::vector<long long> new_layout = entry.second.layout;
-                new_layout[i] += 1;
-                const double new_cost = entry.second.cost + loss_items[i].cost;
-                auto it = next_states.find(new_loss);
-                if (it == next_states.end() || new_cost < it->second.cost - eps) {
-                    next_states[new_loss] = State{new_cost, new_layout};
-                }
-            }
-        }
-        current = std::move(next_states);
-
-        for (const auto& entry : current) {
-            const long long loss = entry.first;
-            if (loss < loss_min || loss > loss_max) continue;
-            double candidate_cost = fixed_cost + static_cast<double>(rem_notes - count - 1) * base_cost;
-            for (size_t i = 0; i < entry.second.layout.size(); ++i) {
-                candidate_cost += static_cast<double>(entry.second.layout[i]) * costs_dict.at(loss_items[i].key);
-            }
-            auto found = candidates.find(loss);
-            if (found == candidates.end() || candidate_cost < found->second.cost - eps) {
-                Best candidate;
-                candidate.cost = candidate_cost;
-                candidate.used = count + 1;
-                candidate.loss = loss;
-                candidate.layout = entry.second.layout;
-                candidates[loss] = candidate;
-            }
-        }
-
-        if ((count + 1) % progress_step == 0 || count + 1 == rem_notes) {
-            log("[XACCreverse] DP " + std::to_string(count + 1) + "/" + std::to_string(rem_notes) +
-                ", states=" + std::to_string(current.size()));
-        }
-    }
-
-    if (candidates.empty()) return fail("DP 没有找到落在目标区间内的分数损失");
-
-    // Closest to the requested accuracy wins; equal distance falls back to the cheapest split.
-    const Best* chosen = nullptr;
-    double chosen_distance = 0.0;
-    for (const auto& kv : candidates) {
-        const Best& candidate = kv.second;
-        const double distance = std::fabs(static_cast<double>(candidate.loss) - ideal_loss);
-        if (chosen == nullptr || distance < chosen_distance - eps ||
-            (distance <= chosen_distance + eps && candidate.cost < chosen->cost - eps)) {
-            chosen = &candidate;
-            chosen_distance = distance;
-        }
-    }
-
-    for (size_t i = 0; i < chosen->layout.size(); ++i) result[loss_items[i].key] += chosen->layout[i];
-    result[base_key] += rem_notes - chosen->used;
-
-    double final_score = 0.0;
-    for (const std::string& key : keys) final_score += static_cast<double>(result[key]) * weights.at(key);
-    log("[XACCreverse] 完成: loss=" + std::to_string(chosen->loss) + ", used_replacements=" + std::to_string(chosen->used) +
-        ", score=" + format_fixed(final_score, 6) + ", cost=" + format_fixed(chosen->cost, 6));
-    return result;
+    log("[XACCreverse] 完成: score=" + format_fixed(result.score_units, 6) + ", cost=" +
+        std::to_string(result.cost_units) + ", solver=" + xacc_solver_text(result.solver) +
+        ", optimal=" + std::string(result.optimal ? "yes" : "no"));
+    return result.counts;
 }
 
 }  // namespace tuf

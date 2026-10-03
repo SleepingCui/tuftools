@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "pyjson.hpp"
+#include "xacc_model.hpp"
 
 namespace tuf {
 
@@ -63,19 +64,22 @@ private:
 
 // -------------------------------------------------------------- XACCTools ---
 // XPerfect splits the single `perfect` judgement into +perfect / -perfect / xperfect.
-// By default all three carry perfect's weight (1.0), so the XACC value of a run is
-// unchanged; only the reverse search treats them as distinct judgements, and it
-// prices them separately through costs.json (defaults: xperfect 0, +perfect 10,
-// -perfect 10).
+// All three carry perfect's weight (1.0), so the XACC value of a run is unchanged;
+// only the reverse search treats them as distinct judgements, and it prices them
+// separately through xacc.json (defaults: xperfect 0, +perfect 10, -perfect 10).
 //
-// The tables themselves live in weights.cpp and are overridden by weights.json.
+// The judgement weights are a FIXED GAME RULE, not configuration: XACC is defined
+// by them, so they are compiled in (weights.cpp) and never read from or written to
+// a data file.  Only the difficulty coefficients are meant to be tunable.
 const std::vector<std::string>& jd_keys(bool xperfect = false);
-const std::map<std::string, double>& default_jd_weights();
-std::map<std::string, double> jd_weights_load();
-void jd_weights_save(const std::map<std::string, double>& weights);
-// Read fresh from weights.json on every call, so an edit takes effect at once.
-std::map<std::string, double> jd_weights(bool xperfect = false);
+const std::map<std::string, double>& fixed_jd_weights();
+
+// Compatibility wrappers (they load their own model).  Prefer the model-aware
+// overloads below: one operation should load the configuration exactly once.
 double xacc_calc(const std::vector<long long>& judgements, bool xperfect = false);
+double xacc_calc(const XaccModel& model, const std::vector<long long>& judgements, bool xperfect);
+// Returns the XACC ratio in [0, 1].
+//
 // acc_decimals is the number of decimals the user typed for the target XACC; the
 // search window (and therefore the reported result) follows that precision.
 std::optional<std::map<std::string, long long>> xacc_reverse(double target_acc, long long total,

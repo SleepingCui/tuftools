@@ -1,8 +1,5 @@
 name: build
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       branch:
@@ -20,7 +17,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         ref: ${{ github.event.inputs.branch || github.ref }}
-        fetch-depth: 0 
+        fetch-depth: 0
 
     - name: Set up MinGW-w64, CMake and Ninja
       uses: msys2/setup-msys2@v2
@@ -33,15 +30,16 @@ jobs:
       id: meta
       shell: bash
       run: |
-        BUILD_TIME=$(date +'%Y%m%d-%H%M%S')
+        BUILD_DATE=$(date +'%Y%m%d')
+        BUILD_CLOCK=$(date +'%H%M%S')
         SHORT_SHA=$(git rev-parse --short HEAD)
-        TAG_NAME="${BUILD_TIME}-${SHORT_SHA}"
-        BUILD_STAMP="${BUILD_TIME:0:4}-${BUILD_TIME:4:2}-${BUILD_TIME:6:2} ${BUILD_TIME:9:2}:${BUILD_TIME:11:2}:${BUILD_TIME:13:2}"
+        TAG_NAME="${BUILD_DATE}-${SHORT_SHA}"
+        BUILD_STAMP="${BUILD_DATE:0:4}-${BUILD_DATE:4:2}-${BUILD_DATE:6:2} ${BUILD_CLOCK:0:2}:${BUILD_CLOCK:2:2}:${BUILD_CLOCK:4:2}"
         echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
         echo "BUILD_STAMP=${BUILD_STAMP}" >> $GITHUB_ENV
         echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
-        PREV_SHA=$(git rev-list --tags --max-count=1 2>/dev/null || git rev-list --max-parents=0 HEAD | head -n 1)
-        echo "PREV_SHA=${PREV_SHA}" >> $GITHUB_ENV
+        echo "commit=${SHORT_SHA}" >> $GITHUB_OUTPUT
+        echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
     - name: Configure (CMake + Ninja)
       shell: msys2 {0}
@@ -58,12 +56,14 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.meta.outputs.tag }}
+        target_commitish: ${{ steps.meta.outputs.sha }}
         name: ci-${{ steps.meta.outputs.tag }}
         body: |
           build with CMake + MinGW-w64 (Ninja)
+          Commit: ${{ steps.meta.outputs.commit }}
           Compiled at: ${{ env.BUILD_STAMP }} (UTC)
         files: |
           build/tuftools.exe
-          
+
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
