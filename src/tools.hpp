@@ -62,13 +62,24 @@ private:
 };
 
 // -------------------------------------------------------------- XACCTools ---
-const std::vector<std::string>& jd_keys();
-const std::map<std::string, double>& jd_weights();
-double xacc_calc(const std::vector<long long>& judgements);
+// XPerfect splits the single `perfect` judgement into +perfect / -perfect / xperfect.
+// By default all three carry perfect's weight (1.0), so the XACC value of a run is
+// unchanged; only the reverse search treats them as distinct judgements, and it
+// prices them separately through costs.json (defaults: xperfect 0, +perfect 10,
+// -perfect 10).
+//
+// The tables themselves live in weights.cpp and are overridden by weights.json.
+const std::vector<std::string>& jd_keys(bool xperfect = false);
+const std::map<std::string, double>& default_jd_weights();
+std::map<std::string, double> jd_weights_load();
+void jd_weights_save(const std::map<std::string, double>& weights);
+// Read fresh from weights.json on every call, so an edit takes effect at once.
+std::map<std::string, double> jd_weights(bool xperfect = false);
+double xacc_calc(const std::vector<long long>& judgements, bool xperfect = false);
 // acc_decimals is the number of decimals the user typed for the target XACC; the
 // search window (and therefore the reported result) follows that precision.
 std::optional<std::map<std::string, long long>> xacc_reverse(double target_acc, long long total,
                                                              const std::map<std::string, long long>& fixed_counts,
-                                                             int acc_decimals = 2);
+                                                             int acc_decimals = 2, bool xperfect = false);
 
 }  // namespace tuf

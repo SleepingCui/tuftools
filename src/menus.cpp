@@ -267,10 +267,20 @@ void handle_pp_calc() {
 
 namespace {
 
-const std::vector<std::string>& xacc_keys() { return jd_keys(); }
+const std::vector<std::string>& xacc_keys(bool xperfect) { return jd_keys(xperfect); }
+
+// XPerfect splits `perfect` into +perfect / -perfect / xperfect, so the judgement
+// set (and therefore the number of values the user types) changes with the mode.
+bool ask_xperfect_mode() { return lower_ascii(read_trimmed("是否启用 XPerfect? (y/N): ")) == "y"; }
 
 void acc_run1() {
-    std::cout << "输入格式: failMiss tooEarly early EPerfect perfect LPerfect late" << std::endl;
+    const bool xperfect = ask_xperfect_mode();
+    const std::vector<std::string>& keys = xacc_keys(xperfect);
+
+    std::cout << "输入格式: "
+              << (xperfect ? "failMiss tooEarly early EPerfect +perfect xperfect -perfect LPerfect late"
+                           : "failMiss tooEarly early EPerfect perfect LPerfect late")
+              << std::endl;
 
     const std::string raw = read_trimmed("判定数据: ");
 
@@ -279,8 +289,8 @@ void acc_run1() {
     std::string token;
     while (stream >> token) values.push_back(token);
 
-    if (values.size() != 7) {
-        std::cout << "需要输入7个数字" << std::endl;
+    if (values.size() != keys.size()) {
+        std::cout << "需要输入" << keys.size() << "个数字" << std::endl;
         return;
     }
 
@@ -295,10 +305,13 @@ void acc_run1() {
     }
 
     std::cout << std::endl;
-    std::cout << "XACC: " << py_float_str(xacc_calc(judgements) * 100.0) << "%" << std::endl;
+    std::cout << "XACC: " << py_float_str(xacc_calc(judgements, xperfect) * 100.0) << "%" << std::endl;
 }
 
 void acc_run2() {
+    const bool xperfect = ask_xperfect_mode();
+    const std::vector<std::string>& keys = xacc_keys(xperfect);
+
     const std::optional<long long> total_parsed = try_parse_int(read_trimmed("物量: "));
     if (!total_parsed.has_value()) {
         std::cout << "invalid literal for int() with base 10" << std::endl;
@@ -322,10 +335,9 @@ void acc_run2() {
         return;
     }
 
-    const std::vector<std::string>& keys = xacc_keys();
     std::map<std::string, long long> fixed_counts;
     for (const std::string& key : keys) {
-        const std::string value = read_trimmed("固定 " + key + " 的数量 (直接回车表示不固定): ");
+        const std::string value = read_trimmed("固定 " + key + " 的数量 (回车表示不固定): ");
         if (value.empty()) continue;
         const std::optional<long long> parsed = try_parse_int(value);
         if (!parsed.has_value()) {
@@ -338,7 +350,7 @@ void acc_run2() {
     std::cout << "正在计算...这可能需要一些时间" << std::endl;
     const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     const std::optional<std::map<std::string, long long>> result =
-        xacc_reverse(target_acc, total, fixed_counts, acc_decimals);
+        xacc_reverse(target_acc, total, fixed_counts, acc_decimals, xperfect);
     const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     const double elapsed =
         std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start).count();
@@ -361,7 +373,7 @@ void acc_run2() {
         for (const std::string& key : keys) {
             auto it = counts.find(key);
             const long long value = it == counts.end() ? 0 : it->second;
-            score_units += value * std::llround(jd_weights().at(key) * 20.0);
+            score_units += value * std::llround(jd_weights(xperfect).at(key) * 20.0);
         }
         const double actual_acc = static_cast<double>(score_units) * 5.0 / static_cast<double>(total);
         std::cout << std::endl << " XACC: " << py_float_str(actual_acc) << "%";

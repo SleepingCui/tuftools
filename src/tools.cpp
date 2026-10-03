@@ -21,8 +21,8 @@ constexpr const char* DIFFICULTIES_FILE = "difficulties.json";
 // ============================================================== CostsMan ====
 
 const std::vector<std::string>& jd_cost_keys() {
-    static const std::vector<std::string> keys = {"perfect", "failMiss", "tooEarly", "early",
-                                                  "late",    "ePerfect", "lPerfect"};
+    static const std::vector<std::string> keys = {"perfect",  "failMiss", "tooEarly", "early",    "late",
+                                                  "ePerfect", "lPerfect", "+perfect", "xperfect", "-perfect"};
     return keys;
 }
 
@@ -30,6 +30,8 @@ const std::map<std::string, double>& default_jd_costs() {
     static const std::map<std::string, double> costs = {
         {"perfect", 0.0},   {"failMiss", 1.0}, {"tooEarly", 1.5},  {"early", 50.0},
         {"late", 50.0},     {"ePerfect", 50.0}, {"lPerfect", 50.0},
+        // XPerfect sub-judgements: equal weight to perfect, but not equally easy to hit.
+        {"+perfect", 10.0}, {"xperfect", 0.0}, {"-perfect", 10.0},
     };
     return costs;
 }
@@ -266,41 +268,35 @@ Json TUFScoreCalculator::calculate_score(const Json& level_data, double accuracy
 
 // =========================================================== XACCTools =====
 
-const std::vector<std::string>& jd_keys() {
-    static const std::vector<std::string> keys = {"failMiss", "tooEarly", "early", "ePerfect",
-                                                  "perfect",  "lPerfect", "late"};
-    return keys;
-}
+// XPerfect: the single `perfect` judgement is reported by the game as +perfect,
+// -perfect or xperfect.  Their XACC weight is identical to perfect's, so a run
+// scores exactly the same in both modes; only the reverse search distinguishes
+// them (they carry their own costs, see jd_cost_keys()).
+// The judgement list and the weight tables themselves live in weights.cpp.
 
-const std::map<std::string, double>& jd_weights() {
-    static const std::map<std::string, double> weights = {
-        {"failMiss", 0.0}, {"tooEarly", 0.2}, {"early", 0.4}, {"ePerfect", 0.75},
-        {"perfect", 1.0},  {"lPerfect", 0.75}, {"late", 0.4},
-    };
-    return weights;
-}
-
-double xacc_calc(const std::vector<long long>& judgements) {
-    if (judgements.size() != 7) return 0.0;
+double xacc_calc(const std::vector<long long>& judgements, bool xperfect) {
+    const std::vector<std::string>& keys = jd_keys(xperfect);
+    if (judgements.size() != keys.size()) return 0.0;
     long long total = 0;
     for (long long value : judgements) total += value;
     if (total == 0) return 0.0;
 
-    const std::vector<std::string>& keys = jd_keys();
+    const std::map<std::string, double>& weights = jd_weights(xperfect);
     double weighted_sum = 0.0;
-    for (size_t i = 0; i < 7; ++i) weighted_sum += static_cast<double>(judgements[i]) * jd_weights().at(keys[i]);
+    for (size_t i = 0; i < keys.size(); ++i) weighted_sum += static_cast<double>(judgements[i]) * weights.at(keys[i]);
     return weighted_sum / static_cast<double>(total);
 }
 
 std::optional<std::map<std::string, long long>> xacc_reverse(double target_acc, long long total,
                                                              const std::map<std::string, long long>& fixed_counts,
-                                                             int acc_decimals) {
+                                                             int acc_decimals, bool xperfect) {
     const std::map<std::string, double> costs_dict = costs_load();
-    const std::vector<std::string>& keys = jd_keys();
+    const std::vector<std::string>& keys = jd_keys(xperfect);
+    const std::map<std::string, double>& weights = jd_weights(xperfect);
 
     std::map<std::string, long long> weight_units;
     for (const std::string& key : keys) {
-        weight_units[key] = static_cast<long long>(std::llround(jd_weights().at(key) * 20.0));
+        weight_units[key] = static_cast<long long>(std::llround(weights.at(key) * 20.0));
     }
 
     // Result precision follows the decimals the user typed for the target XACC:
@@ -542,7 +538,7 @@ std::optional<std::map<std::string, long long>> xacc_reverse(double target_acc, 
     result[base_key] += rem_notes - chosen->used;
 
     double final_score = 0.0;
-    for (const std::string& key : keys) final_score += static_cast<double>(result[key]) * jd_weights().at(key);
+    for (const std::string& key : keys) final_score += static_cast<double>(result[key]) * weights.at(key);
     log("[XACCreverse] 完成: loss=" + std::to_string(chosen->loss) + ", used_replacements=" + std::to_string(chosen->used) +
         ", score=" + format_fixed(final_score, 6) + ", cost=" + format_fixed(chosen->cost, 6));
     return result;
