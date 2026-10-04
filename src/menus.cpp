@@ -400,35 +400,30 @@ void acc_run1() {
     std::cout << "XACC: " << py_float_str(xacc_acc_percent(weighted, total, model)) << "%" << std::endl;
 }
 
-void acc_run2() {
-    const bool xperfect = ask_xperfect_mode();
-    const std::vector<std::string>& keys = xacc_keys(xperfect);
-
+// Collects the total, the target and the pinned judgement counts shared by every
+// reverse-query entry point.  Returns false when the user's input was rejected.
+bool ask_reverse_query(bool xperfect, const std::vector<std::string>& keys, long long& total, XaccTarget& target,
+                       std::map<std::string, long long>& fixed_counts) {
     const std::optional<long long> total_parsed = try_parse_int(read_trimmed("物量: "));
     if (!total_parsed.has_value()) {
         std::cout << "invalid literal for int() with base 10" << std::endl;
-        return;
+        return false;
     }
-    const long long total = *total_parsed;
+    total = *total_parsed;
     if (total <= 0) {
         std::cout << "物量必须大于 0" << std::endl;
-        return;
+        return false;
     }
 
     // The target is parsed as an exact decimal (never through a double), so the
     // search window is exactly the set of accuracies that round to what was typed.
     const std::string target_text = read_trimmed("XACC: ");
-    XaccTarget target;
     std::string error;
     if (!xacc_parse_target(target_text, target, error)) {
         std::cout << error << std::endl;
-        return;
+        return false;
     }
 
-    XaccModel model;
-    if (!acc_load_model(model)) return;
-
-    std::map<std::string, long long> fixed_counts;
     for (const std::string& key : keys) {
         const std::string value = read_trimmed("固定 " + key + " 的数量 (回车表示不固定): ");
         if (value.empty()) continue;
@@ -443,6 +438,21 @@ void acc_run2() {
         }
         fixed_counts[key] = *parsed;
     }
+    (void)xperfect;
+    return true;
+}
+
+void acc_run2() {
+    const bool xperfect = ask_xperfect_mode();
+    const std::vector<std::string>& keys = xacc_keys(xperfect);
+
+    long long total = 0;
+    XaccTarget target;
+    std::map<std::string, long long> fixed_counts;
+    if (!ask_reverse_query(xperfect, keys, total, target, fixed_counts)) return;
+
+    XaccModel model;
+    if (!acc_load_model(model)) return;
 
     std::cout << "\n正在计算...这可能需要一些时间" << std::endl;
     std::cout << "求解器: " << xacc_solver_text(g_acc_solver) << std::endl;
@@ -465,7 +475,6 @@ void acc_run2() {
             std::cout << " " << pad_right(key, 10) << ": " << value << " " << status << std::endl;
         }
 
-
         constexpr int kAccDisplayDecimals = 6;
         const double achieved_acc = xacc_acc_percent(result.score_units, total, model);
         std::string achieved_text = trim_fixed(achieved_acc, kAccDisplayDecimals);
@@ -485,6 +494,56 @@ void acc_run2() {
         if (!result.note.empty()) std::cout << " " << result.note << std::endl;
     }
     std::cout << " Elapsed " << py_float_str(result.elapsed_ms) << " ms" << std::endl;
+}
+
+// Lists the combinations that are interchangeable with the reported optimum.
+void acc_run_equivalents() {
+    const bool xperfect = ask_xperfect_mode();
+    const std::vector<std::string>& keys = xacc_keys(xperfect);
+
+    long long total = 0;
+    XaccTarget target;
+    std::map<std::string, long long> fixed_counts;
+    if (!ask_reverse_query(xperfect, keys, total, target, fixed_counts)) return;
+
+    XaccModel model;
+    if (!acc_load_model(model)) return;
+
+    XaccReverseOptions options;
+    options.solver = g_acc_solver;
+    options.max_nodes = model.max_nodes;
+    options.max_dp_cells = model.max_dp_cells;
+    options.max_seconds = model.max_seconds;
+
+    std::cout << "\n正在枚举...这可能需要一些时间" << std::endl;
+    const XaccEquivalentSet set = xacc_equivalents(model, target, total, fixed_counts, xperfect, 64, options);
+    std::cout << std::endl;
+    if (!set.ok()) {
+        std::cout << "无法达成该目标 XACC: " << set.message << std::endl;
+        return;
+    }
+
+    const double acc = xacc_acc_percent(set.score_units, total, model);
+    std::cout << " 共找到 " << set.solutions.size() << " 个等效组合"
+              << "，均达成 XACC: " << trim_fixed(acc, 6) << "%"
+              << "，与目标相差 " << set.distance_units << " 个分数单位"
+              << "，难度系数合计 " << set.cost_units << std::endl;
+    if (set.truncated) {
+        std::cout << " (仅显示前 " << set.solutions.size() << " 个)" << std::endl;
+    }
+    std::cout << std::endl;
+
+    long long index = 1;
+    for (const std::map<std::string, long long>& solution : set.solutions) {
+        std::cout << " [" << index << "]";
+        for (const std::string& key : keys) {
+            auto it = solution.find(key);
+            const long long value = it == solution.end() ? 0 : it->second;
+            std::cout << " " << key << ":" << value;
+        }
+        std::cout << std::endl;
+        ++index;
+    }
 }
 
 void acc_run3() {
@@ -564,7 +623,6 @@ void acc_edit_solver_params() {
         if (!parsed.has_value() || *parsed <= 0) {
             std::cout << "输入无效，cost_scale 保持原值" << std::endl;
         } else if (*parsed != model.cost_scale) {
-
             const long double factor = static_cast<long double>(*parsed) / static_cast<long double>(model.cost_scale);
             bool rounded = false;
             for (std::pair<const std::string, XaccCostUnit>& entry : model.cost_units) {
@@ -606,9 +664,10 @@ void handle_acc_calc() {
         std::cout << std::endl;
         std::cout << "1. 根据判定计算 XACC" << std::endl;
         std::cout << "2. 根据 XACC 推算判定" << std::endl;
-        std::cout << "3. 自定义难度系数" << std::endl;
-        std::cout << "4. 选择求解器 (当前: " << xacc_solver_text(g_acc_solver) << ")" << std::endl;
-        std::cout << "5. 编辑求解器参数" << std::endl;
+        std::cout << "3. 列出等效判定组合" << std::endl;
+        std::cout << "4. 自定义难度系数" << std::endl;
+        std::cout << "5. 选择求解器 (当前: " << xacc_solver_text(g_acc_solver) << ")" << std::endl;
+        std::cout << "6. 编辑求解器参数" << std::endl;
         std::cout << "b. 返回主菜单" << std::endl;
 
         const std::string choice = read_trimmed("> ");
@@ -618,10 +677,12 @@ void handle_acc_calc() {
         } else if (choice == "2") {
             acc_run2();
         } else if (choice == "3") {
-            acc_run3();
+            acc_run_equivalents();
         } else if (choice == "4") {
-            acc_choose_solver();
+            acc_run3();
         } else if (choice == "5") {
+            acc_choose_solver();
+        } else if (choice == "6") {
             acc_edit_solver_params();
         } else if (choice == "b") {
             break;

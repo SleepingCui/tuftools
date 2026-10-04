@@ -17,6 +17,9 @@ int run(int argc, char** argv) {
     program.add_description("TUF Tools");
     program.add_argument("--proxy").help("http proxy URL");
     program.add_argument("--verbose", "-v").help("Verbose output").default_value(false).implicit_value(true);
+    program.add_argument("--no-cache").help("Do not read or write the response cache")
+        .default_value(false)
+        .implicit_value(true);
 
     try {
         program.parse_args(argc, argv);
@@ -31,11 +34,13 @@ int run(int argc, char** argv) {
         proxy = *value;
     }
     const bool verbose = program.get<bool>("--verbose");
+    const bool no_cache = program.get<bool>("--no-cache");
 
     if (!proxy.empty()) {
         tuf::set_proxies(proxy);
     }
     tuf::set_verbose(verbose);
+    tuf::set_cache_enabled(!no_cache);
 
     std::cout << "=== TUF Tools ===" << std::endl;
     std::cout << "Github: github.com/sleepingcui/tuftools TUF: tuforums.com" << std::endl;
@@ -46,6 +51,7 @@ int run(int argc, char** argv) {
         std::cout << "1. 玩家数据查询" << std::endl;
         std::cout << "2. PP计算器" << std::endl;
         std::cout << "3. XACC计算器" << std::endl;
+        std::cout << "4. 清空缓存" << std::endl;
         std::cout << "q. 退出" << std::endl;
 
         const std::string choice = tuf::read_trimmed("\n> ");
@@ -57,6 +63,17 @@ int run(int argc, char** argv) {
                 tuf::handle_pp_calc();
             } else if (choice == "3") {
                 tuf::handle_acc_calc();
+            } else if (choice == "4") {
+                if (no_cache) {
+                    std::cout << "已启用 --no-cache，本次运行不会读写缓存" << std::endl;
+                } else {
+                    std::string error;
+                    if (tuf::cache_clear(error)) {
+                        std::cout << "缓存已清空" << std::endl;
+                    } else {
+                        std::cout << "缓存清空失败: " << error << std::endl;
+                    }
+                }
             } else if (choice == "q") {
                 std::cout << "exit" << std::endl;
                 break;
@@ -71,6 +88,7 @@ int run(int argc, char** argv) {
         }
     }
 
+    tuf::cache_flush();
     return 0;
 }
 
@@ -82,6 +100,7 @@ int main(int argc, char** argv) {
         return run(argc, argv);
     } catch (const tuf::InputClosed&) {
         // Piped input ended: behave like a normal quit instead of looping.
+        tuf::cache_flush();
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "错误: " << e.what() << std::endl;

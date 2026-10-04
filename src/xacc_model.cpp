@@ -29,9 +29,6 @@ constexpr XaccCostUnit kDefaultCostScale = 1000;
 // of silently rounded (tgb.md 4.1).
 constexpr double kExactEpsilon = 1e-6;
 constexpr int kMaxTargetDecimals = 6;
-constexpr const char* kUnitsNote =
-    "weights/costs are integers: value = units / scoreScale (or costScale). "
-    "A fractional number here is read as a plain value and converted.";
 
 bool file_exists(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
@@ -307,7 +304,6 @@ bool xacc_model_save(const XaccModel& model, std::string& error) {
         root.set("maxDpCells", model.max_dp_cells);
         root.set("maxNodes", model.max_nodes);
         root.set("maxSeconds", model.max_seconds);
-        root.set("_note", kUnitsNote);
         Json weights = Json::object();
         Json costs = Json::object();
         for (const std::string& key : jd_cost_keys()) {

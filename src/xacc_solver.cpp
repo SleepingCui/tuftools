@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -1148,6 +1149,338 @@ XaccReverseResult xacc_reverse_search(const XaccModel& model, const XaccTarget& 
         if (!result.note.empty()) trace("备注: " + result.note);
     }
     return result;
+}
+
+// ------------------------------------------------------- equivalent sets ----
+//
+// The reverse search reports ONE combination: among everything that ties on
+// (distance, cost, non-base) it applies a final lexicographic tie-break and hides
+// the rest.  Those hidden combinations print the same XACC and the same
+// difficulty total, so for a player they are genuinely interchangeable -- this
+// exposes them.
+namespace {
+
+// Walks the DP backwards collecting every combination reaching `k`, up to `cap`.
+// `budget` is the optimal total cost (fixed judgements included) and `spent` is
+// the total cost accumulated so far, also including the fixed part.  The DP only
+// stores the cheapest way into each cell, so most backwards orderings overshoot
+// the optimum, and exploring those would drown the real ties inside the cap.
+void collect_combinations(const std::vector<std::size_t>& offsets, const std::vector<Item>& items,
+                          const std::vector<int>& order, int n, long long k, std::size_t layer,
+                          XaccCostUnit spent, XaccCostUnit budget,
+                          std::vector<long long>& current, std::vector<std::vector<long long>>& out,
+                          long long cap, long long max_ur) {
+    if (static_cast<long long>(out.size()) >= cap) return;
+    if (spent > budget) return;
+    if (k < 0) return;
+    // Even using the widest step for every remaining layer, this k is unreachable.
+    if (k > static_cast<long long>(layer) * max_ur) return;
+
+    if (layer == 0) {
+        if (k == 0 && spent == budget) out.push_back(current);
+        return;
+    }
+
+    const std::size_t base = offsets[layer];
+    const std::size_t previous_base = offsets[layer - 1];
+    const std::size_t previous_width = base - previous_base;
+
+    for (int index : order) {
+        const Item& item = items[static_cast<std::size_t>(index)];
+        const long long previous_k = k - item.ur;
+        if (previous_k < 0) continue;
+        if (static_cast<std::size_t>(previous_k) >= previous_width) continue;
+        const XaccCostUnit next_spent = spent + item.cost;
+        if (next_spent > budget) continue;
+
+        current[static_cast<std::size_t>(index)] += 1;
+        collect_combinations(offsets, items, order, n, previous_k, layer - 1, next_spent, budget, current, out, cap,
+                             max_ur);
+        current[static_cast<std::size_t>(index)] -= 1;
+        if (static_cast<long long>(out.size()) >= cap) return;
+    }
+}
+
+}  // namespace
+
+XaccEquivalentSet xacc_equivalents(const XaccModel& model, const XaccTarget& target, XaccCount total,
+                                   const std::map<std::string, long long>& fixed_counts, bool xperfect,
+                                   long long max_solutions, const XaccReverseOptions& options) {
+    XaccEquivalentSet out;
+    const std::vector<std::string>& keys = jd_keys(xperfect);
+    const int n = static_cast<int>(keys.size());
+
+    if (total <= 0) {
+        out.status = XaccStatus::invalid_input;
+        out.message = "物量必须大于 0";
+        return out;
+    }
+    if (max_solutions <= 0) max_solutions = 1;
+
+    long long fixed_notes = 0;
+    XaccScoreUnit fixed_score = 0;
+    XaccCostUnit fixed_cost = 0;
+    for (const std::pair<const std::string, long long>& entry : fixed_counts) {
+        if (entry.second < 0) {
+            out.status = XaccStatus::invalid_input;
+            out.message = "固定数量不能为负: " + entry.first;
+            return out;
+        }
+        if (entry.second == 0) continue;
+        if (std::find(keys.begin(), keys.end(), entry.first) == keys.end()) {
+            out.status = XaccStatus::invalid_input;
+            out.message = "固定判定不属于当前模式: " + entry.first;
+            return out;
+        }
+    }
+    for (const std::string& key : keys) {
+        auto it = fixed_counts.find(key);
+        const long long count = (it == fixed_counts.end()) ? 0 : it->second;
+        if (!add_checked(fixed_notes, count, fixed_notes)) {
+            out.status = XaccStatus::invalid_input;
+            out.message = "固定数量溢出";
+            return out;
+        }
+        std::int64_t add = 0;
+        if (!mul_checked(model.weight(key), count, add) || !add_checked(fixed_score, add, fixed_score) ||
+            !mul_checked(model.cost(key), count, add) || !add_checked(fixed_cost, add, fixed_cost)) {
+            out.status = XaccStatus::invalid_input;
+            out.message = "固定部分溢出";
+            return out;
+        }
+    }
+    if (fixed_notes > total) {
+        out.status = XaccStatus::invalid_input;
+        out.message = "固定数量之和超过物量";
+        return out;
+    }
+
+    const long long free_notes = total - fixed_notes;
+    if (free_notes == 0) {
+        out.status = XaccStatus::invalid_input;
+        out.message = "没有可自由分配的判定";
+        return out;
+    }
+
+    // Build the items exactly the way Search::run prepares them.
+    XaccScoreUnit min_weight = 0;
+    bool first = true;
+    for (const std::string& key : keys) {
+        const XaccScoreUnit weight = model.weight(key);
+        if (first || weight < min_weight) {
+            min_weight = weight;
+            first = false;
+        }
+    }
+    std::vector<Item> items(static_cast<std::size_t>(n));
+    long long divisor = 0;
+    int base_index = 0;
+    for (int i = 0; i < n; ++i) {
+        Item& item = items[static_cast<std::size_t>(i)];
+        item.key = keys[static_cast<std::size_t>(i)];
+        item.key_index = i;
+        item.weight = model.weight(item.key);
+        item.cost = model.cost(item.key);
+        item.u = static_cast<XaccScoreUnit>(item.weight - min_weight);
+        divisor = std::__gcd(divisor, static_cast<long long>(item.u));
+        if (item.u < items[static_cast<std::size_t>(base_index)].u ||
+            (item.u == items[static_cast<std::size_t>(base_index)].u &&
+             item.cost < items[static_cast<std::size_t>(base_index)].cost)) {
+            base_index = i;
+        }
+    }
+    if (divisor <= 0) {
+        out.status = XaccStatus::invalid_input;
+        out.message = "所有判定权重相同，不存在等效组合";
+        return out;
+    }
+    long long max_ur = 0;
+    for (Item& item : items) {
+        item.ur = static_cast<std::int64_t>(item.u) / divisor;
+        max_ur = std::max(max_ur, item.ur);
+    }
+
+    const std::int64_t base_score_all = static_cast<std::int64_t>(free_notes) * min_weight + fixed_score;
+    XaccScoreUnit target_units = 0;
+    {
+        std::string error;
+        if (!xacc_target_units(target, model, total, target_units, error)) {
+            out.status = XaccStatus::invalid_input;
+            out.message = error;
+            return out;
+        }
+    }
+    if (target_units < base_score_all) {
+        out.status = XaccStatus::unreachable;
+        out.message = "目标低于最低可达分数";
+        return out;
+    }
+    const std::int64_t target_loss = target_units - base_score_all;
+    if (target_loss % divisor != 0) {
+        out.status = XaccStatus::unreachable;
+        out.message = "目标与可达格点不对齐";
+        return out;
+    }
+
+    // Dense DP over layers, keeping the cheapest (cost, non-base) per cell.
+    std::vector<std::size_t> offsets(static_cast<std::size_t>(free_notes) + 2, 0);
+    std::size_t total_cells = 1;  // layer 0 holds the single loss-0 cell
+    for (long long t = 1; t <= free_notes; ++t) {
+        offsets[static_cast<std::size_t>(t)] = total_cells;
+        total_cells += static_cast<std::size_t>(t) * static_cast<std::size_t>(max_ur) + 1;
+        if (total_cells > static_cast<std::size_t>(options.max_dp_cells)) {
+            out.status = XaccStatus::budget_exhausted;
+            out.message = "精确DP 状态数超过预算（当前 " + num(static_cast<long long>(total_cells)) + "，预算 " +
+                          num(options.max_dp_cells) + "），请增大 max_dp_cells 或减小物量";
+            return out;
+        }
+    }
+    offsets[static_cast<std::size_t>(free_notes) + 1] = total_cells;
+
+    struct Entry {
+        XaccCostUnit cost = kCostInf;
+        long long non_base = kNoteInf;
+    };
+    auto entry_less = [](const Entry& a, const Entry& b) {
+        if (a.cost != b.cost) return a.cost < b.cost;
+        return a.non_base < b.non_base;
+    };
+
+    std::vector<Entry> previous(1);
+    previous[0] = Entry{0, 0};
+    std::vector<Entry> current;
+    for (long long t = 1; t <= free_notes; ++t) {
+        const std::size_t base = offsets[static_cast<std::size_t>(t)];
+        const std::size_t width = offsets[static_cast<std::size_t>(t) + 1] - base;
+        current.assign(width, Entry{});
+        const std::size_t previous_width = previous.size();
+        for (int i = 0; i < n; ++i) {
+            const std::size_t step = static_cast<std::size_t>(items[static_cast<std::size_t>(i)].ur);
+            const XaccCostUnit step_cost = items[static_cast<std::size_t>(i)].cost;
+            const long long step_non_base = (i == base_index) ? 0 : 1;
+            for (std::size_t k = 0; k < previous_width; ++k) {
+                const Entry& source = previous[k];
+                if (source.cost >= kCostInf) continue;
+                const std::size_t cell = k + step;
+                if (cell >= width) continue;
+                Entry candidate;
+                candidate.cost = source.cost + step_cost;
+                candidate.non_base = source.non_base + step_non_base;
+                if (entry_less(candidate, current[cell])) current[cell] = candidate;
+            }
+        }
+        previous.swap(current);
+    }
+
+    // Every cell of the last layer whose (distance, cost, non-base) ties the
+    // optimum is a legitimate equivalent.
+    XaccCostUnit best_cost = kCostInf;
+    long long best_non_base = kNoteInf;
+    XaccScoreUnit best_distance = 0;
+    std::vector<long long> best_ks;
+    for (std::size_t k = 0; k < previous.size(); ++k) {
+        const Entry& entry = previous[k];
+        if (entry.cost >= kCostInf) continue;
+        std::int64_t loss = 0;
+        if (!mul_checked(static_cast<std::int64_t>(k), divisor, loss)) continue;
+        const std::int64_t score = base_score_all + loss;
+        const XaccScoreUnit distance = static_cast<XaccScoreUnit>(std::llabs(score - target_units));
+        const XaccCostUnit cost = fixed_cost + entry.cost;
+        const bool better = best_ks.empty() || distance < best_distance ||
+                            (distance == best_distance &&
+                             (cost < best_cost || (cost == best_cost && entry.non_base < best_non_base)));
+        if (better) {
+            best_distance = distance;
+            best_cost = cost;
+            best_non_base = entry.non_base;
+            best_ks.clear();
+            best_ks.push_back(static_cast<long long>(k));
+        } else if (distance == best_distance && cost == best_cost && entry.non_base == best_non_base) {
+            best_ks.push_back(static_cast<long long>(k));
+        }
+    }
+    if (best_ks.empty()) {
+        out.status = XaccStatus::unreachable;
+        out.message = "没有可达分数";
+        return out;
+    }
+
+    out.score_units = static_cast<XaccScoreUnit>(base_score_all + best_ks.front() * divisor);
+    out.cost_units = best_cost;
+    out.distance_units = best_distance;
+
+    // Recover the actual combinations.  Cheap judgements first, so the cheap
+    // branches are found before the cap is hit.  Back-tracking enumerates
+    // orderings, so identical multisets must be de-duplicated.
+    std::vector<int> order(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) order[static_cast<std::size_t>(i)] = i;
+    std::sort(order.begin(), order.end(), [&items](int a, int b) {
+        const Item& x = items[static_cast<std::size_t>(a)];
+        const Item& y = items[static_cast<std::size_t>(b)];
+        if (x.cost != y.cost) return x.cost < y.cost;
+        return x.key_index < y.key_index;
+    });
+
+    std::set<std::vector<long long>> seen;
+    for (long long k : best_ks) {
+        if (static_cast<long long>(out.solutions.size()) >= max_solutions) {
+            out.truncated = true;
+            break;
+        }
+        std::vector<long long> current_counts(static_cast<std::size_t>(n), 0);
+        std::vector<std::vector<long long>> combos;
+        const long long cap = max_solutions - static_cast<long long>(out.solutions.size());
+        collect_combinations(offsets, items, order, n, k, static_cast<std::size_t>(free_notes), fixed_cost,
+                             best_cost, current_counts, combos, cap, max_ur);
+        for (std::vector<long long>& counts : combos) {
+            // The DP keeps only the cheapest path per cell, so a back-tracked
+            // ordering can overshoot; keep only what really matches the optimum.
+            XaccCostUnit combo_cost = fixed_cost;
+            long long combo_non_base = 0;
+            long long combo_notes = 0;
+            bool ok = true;
+            for (int i = 0; i < n; ++i) {
+                std::int64_t add = 0;
+                if (!mul_checked(items[static_cast<std::size_t>(i)].cost, counts[static_cast<std::size_t>(i)], add) ||
+                    !add_checked(combo_cost, add, combo_cost)) {
+                    ok = false;
+                    break;
+                }
+                combo_notes += counts[static_cast<std::size_t>(i)];
+                if (i != base_index) combo_non_base += counts[static_cast<std::size_t>(i)];
+            }
+            if (!ok) continue;
+            if (combo_notes != free_notes) continue;
+            if (combo_cost != best_cost || combo_non_base != best_non_base) continue;
+            if (!seen.insert(counts).second) continue;
+
+            std::map<std::string, long long> solution;
+            for (int i = 0; i < n; ++i) {
+                const std::string& key = items[static_cast<std::size_t>(i)].key;
+                auto fixed_it = fixed_counts.find(key);
+                const long long fixed_count = (fixed_it == fixed_counts.end()) ? 0 : fixed_it->second;
+                const long long free_count = counts[static_cast<std::size_t>(i)];
+                if (fixed_count + free_count == 0) continue;
+                solution[key] = fixed_count + free_count;
+            }
+            out.solutions.push_back(std::move(solution));
+            if (static_cast<long long>(out.solutions.size()) >= max_solutions) {
+                out.truncated = true;
+                break;
+            }
+        }
+        if (static_cast<long long>(out.solutions.size()) >= max_solutions) {
+            out.truncated = true;
+            break;
+        }
+    }
+
+    if (verbose_enabled()) {
+        trace("等效集: 自由 " + num(free_notes) + "，目标相差 " + num(out.distance_units) + "，难度系数合计 " +
+              num(out.cost_units) + "，并列格点 " + num(static_cast<long long>(best_ks.size())) + "，组合 " +
+              num(static_cast<long long>(out.solutions.size())) + (out.truncated ? "（已截断）" : ""));
+    }
+    return out;
 }
 
 }  // namespace tuf

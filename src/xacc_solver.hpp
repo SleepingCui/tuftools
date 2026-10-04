@@ -65,4 +65,30 @@ XaccReverseResult xacc_reverse_search(const XaccModel& model, const XaccTarget& 
                                       const std::map<std::string, long long>& fixed_counts, bool xperfect,
                                       const XaccReverseOptions& options = XaccReverseOptions());
 
+// ------------------------------------------------------ equivalent set ------
+//
+// Every combination that ties the optimum on the ordering used by the search
+// (distance, then cost, then non-base count).  These all yield the same printed
+// XACC and the same difficulty total, so the search picks one arbitrarily and
+// hides the rest -- this exposes them.  The lexicographic tie-break that picks
+// the *reported* winner is deliberately not applied here.
+//
+// Capped at `max_solutions`; `truncated` reports whether more existed.
+struct XaccEquivalentSet {
+    XaccStatus status = XaccStatus::ok;
+    std::string message;
+    bool ok() const { return status == XaccStatus::ok; }
+
+    XaccScoreUnit score_units = 0;
+    XaccCostUnit cost_units = 0;
+    XaccScoreUnit distance_units = 0;
+    std::vector<std::map<std::string, long long>> solutions;
+    bool truncated = false;
+};
+
+XaccEquivalentSet xacc_equivalents(const XaccModel& model, const XaccTarget& target, XaccCount total,
+                                   const std::map<std::string, long long>& fixed_counts, bool xperfect,
+                                   long long max_solutions = 64,
+                                   const XaccReverseOptions& options = XaccReverseOptions());
+
 }  // namespace tuf
