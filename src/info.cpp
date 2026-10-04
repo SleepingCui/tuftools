@@ -300,8 +300,26 @@ void run_player(const Json& player_in) {
     }
 
     const std::map<std::string, RankVal> ranks = get_all_ranks(player);
-    const PassList passes = fetch_player_passes(player.get("name").as_string(), player.get("id"));
-    details(player, ranks, &passes);
+    const PassList passes = fetch_all_player_passes(player.get("name").as_string(), player.get("id"));
+
+    PassList head;
+    head.total = passes.total;
+    if (static_cast<long long>(passes.rows.size()) > PASS_DISPLAY_LIMIT) {
+        head.rows.assign(passes.rows.begin(), passes.rows.begin() + PASS_DISPLAY_LIMIT);
+    } else {
+        head.rows = passes.rows;
+    }
+    details(player, ranks, &head);
+
+    if (!passes.rows.empty()) {
+        std::cout << std::endl;
+        const std::string more = lower_ascii(read_trimmed("查看全部通关记录? (y/N): "));
+        if (more == "y") {
+            browse_passes(passes.rows, player.get("name").as_string() + " 的通关记录");
+            std::cout << std::endl;
+        }
+    }
+
     std::cout << std::endl;
     stats();
 }
@@ -424,13 +442,20 @@ std::string difficulty_name_of(const Json& level) {
 
 // ----------------------------------------------------------------- passes ---
 
-PassList fetch_player_passes(const std::string& name, const Json& player_id, long long limit, long long fetch_cap) {
+PassList fetch_all_player_passes(const std::string& name, const Json& player_id, long long fetch_cap) {
     PassList out;
     if (name.empty() || player_id.is_null()) return out;
+    if (fetch_cap <= 0) fetch_cap = 64;
 
-    std::vector<Json> collected;
-    long long total = 0;
-    for (long long offset = 0; offset < 256; offset += fetch_cap) {
+    // The endpoint is queried by *player name* and returns every pass whose player
+    // name matches, so the payload has to be filtered down to this exact player id.
+    // `count` is therefore the number of name matches, NOT this player's pass
+    // count, and must never be shown as a total.  Pagination itself must also not
+    // trust `count`: a heavily played account can have more passes than one page
+    // reports, so we keep walking offsets (bounded by kMaxPassScan) until a short
+    // page arrives.  Every row is collected so the caller can page and filter
+    // locally instead of re-querying the API per page.
+    for (long long offset = 0; offset < kMaxPassScan; offset += fetch_cap) {
         const std::string url = BASE_URL + "/v2/database/passes?query=" + url_quote(name) + "&limit=" +
                                 std::to_string(fetch_cap) + "&offset=" + std::to_string(offset);
         Json data;
@@ -441,26 +466,23 @@ PassList fetch_player_passes(const std::string& name, const Json& player_id, lon
         }
 
         if (!data.is_object()) break;
-        const Json& count = data.get("count");
-        if (count.is_number()) total = count.as_int();
-
         const Json& rows = data.get("results");
         if (!rows.is_array()) break;
         for (const Json& row : rows.elements()) {
-            if (row.get("playerId").key_text() == player_id.key_text()) {
-                collected.push_back(row);
-                if (static_cast<long long>(collected.size()) >= limit) {
-                    out.rows = collected;
-                    out.total = total;
-                    return out;
-                }
-            }
+            if (row.get("playerId").key_text() == player_id.key_text()) out.rows.push_back(row);
         }
         if (static_cast<long long>(rows.size()) < fetch_cap) break;
     }
 
-    out.rows = collected;
-    out.total = total;
+    out.total = static_cast<long long>(out.rows.size());
+    return out;
+}
+
+PassList fetch_player_passes(const std::string& name, const Json& player_id, long long limit, long long fetch_cap) {
+    PassList out = fetch_all_player_passes(name, player_id, fetch_cap);
+    if (limit > 0 && static_cast<long long>(out.rows.size()) > limit) {
+        out.rows.resize(static_cast<size_t>(limit));
+    }
     return out;
 }
 
@@ -596,13 +618,11 @@ void print_passes_to(std::ostream& out, const std::vector<Json>& passes, long lo
         std::max(kMinLevelWidth, std::min(available, std::min(natural_level_width, kMaxLevelWidth)));
 
     out << std::endl;
-    out << "通关谱面 (按分数降序，前 " << passes.size() << " 个";
-    if (total) {
-        out << "，共匹配 " << total << " 条):";
-    } else {
-        out << "):";
+    out << "通关谱面 (按分数降序，本页 " << passes.size() << " 条";
+    if (total > static_cast<long long>(passes.size())) {
+        out << "，共 " << total << " 条";
     }
-    out << std::endl;
+    out << "):" << std::endl;
 
     out << std::string(static_cast<size_t>(index_width), ' ') << " " << right_justify("分数", score_width) << " "
         << right_justify("ACC", acc_width) << " " << right_justify("ID", id_width) << " "
@@ -624,6 +644,92 @@ void print_passes_to(std::ostream& out, const std::vector<Json>& passes, long lo
 
 void print_passes(const std::vector<Json>& passes, long long total) {
     print_passes_to(std::cout, passes, total, terminal_width());
+}
+
+// ---------------------------------------------------------------- pager -----
+namespace {
+
+const size_t kPagerPageSize = 16;
+
+}  // namespace
+
+void browse_passes(const std::vector<Json>& passes, const std::string& title) {
+    if (passes.empty()) {
+        std::cout << "该玩家没有可显示的通关记录" << std::endl;
+        return;
+    }
+
+    std::vector<Json> view = passes;
+    size_t page = 0;
+    const size_t page_count = (view.size() + kPagerPageSize - 1) / kPagerPageSize;
+
+    while (true) {
+        const size_t begin = page * kPagerPageSize;
+        const size_t end = std::min(begin + kPagerPageSize, view.size());
+        std::vector<Json> slice(view.begin() + static_cast<long>(begin), view.begin() + static_cast<long>(end));
+
+        std::cout << std::endl;
+        std::cout << title << " — 第 " << (page + 1) << "/" << page_count << " 页 (共 " << view.size() << " 条)"
+                  << std::endl;
+        print_passes(slice, static_cast<long long>(view.size()));
+
+        std::cout << "[n]下一页 [p]上一页 [a]全部 [d]难度筛选 [q]返回" << std::endl;
+        const std::string choice = lower_ascii(read_trimmed("> "));
+
+        if (choice == "q" || choice.empty()) return;
+
+        if (choice == "n") {
+            if (page + 1 < page_count) {
+                ++page;
+            } else {
+                std::cout << "已经是最后一页" << std::endl;
+            }
+        } else if (choice == "p") {
+            if (page > 0) {
+                --page;
+            } else {
+                std::cout << "已经是第一页" << std::endl;
+            }
+        } else if (choice == "a") {
+            std::cout << std::endl;
+            std::cout << title << " — 全部 " << view.size() << " 条" << std::endl;
+            print_passes(view, static_cast<long long>(view.size()));
+            read_trimmed("\n按回车继续...");
+        } else if (choice == "d") {
+            // Collect the difficulties actually present so the user picks from a
+            // real list rather than guessing a spelling.
+            std::vector<std::string> names;
+            for (const Json& row : view) {
+                const std::string name = difficulty_name_of(row.get("level"));
+                if (std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
+            }
+            std::sort(names.begin(), names.end());
+
+            std::cout << "可选难度: ";
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (i) std::cout << ", ";
+                std::cout << "[" << (i + 1) << "]" << names[i];
+            }
+            std::cout << ", [0]全部" << std::endl;
+
+            const std::optional<long long> pick = try_parse_int(read_trimmed("选择难度: "));
+            if (pick.has_value() && *pick >= 0 && *pick <= static_cast<long long>(names.size())) {
+                view = passes;
+                if (*pick > 0) {
+                    const std::string wanted = names[static_cast<size_t>(*pick - 1)];
+                    std::vector<Json> filtered;
+                    for (const Json& row : view) {
+                        if (difficulty_name_of(row.get("level")) == wanted) filtered.push_back(row);
+                    }
+                    view = filtered;
+                }
+                page = 0;
+                if (view.empty()) std::cout << "该难度下没有通关记录" << std::endl;
+            } else {
+                std::cout << "选择无效" << std::endl;
+            }
+        }
+    }
 }
 
 }  // namespace tuf

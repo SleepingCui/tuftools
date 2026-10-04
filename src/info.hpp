@@ -41,6 +41,7 @@ struct RankVal {
 };
 
 const int PASS_DISPLAY_LIMIT = 16;
+const long long kMaxPassScan = 4096;
 
 Json player_search(const std::string& query);
 Json get_player(const std::string& pid);
@@ -71,8 +72,13 @@ std::string cut_width(const std::string& text, int width);
 std::string pad_width(const std::string& text, int width);
 std::string right_justify(const std::string& text, int width);
 
+PassList fetch_all_player_passes(const std::string& name, const Json& player_id, long long fetch_cap = 64);
 PassList fetch_player_passes(const std::string& name, const Json& player_id, long long limit = PASS_DISPLAY_LIMIT,
                              long long fetch_cap = 64);
+// Interactive pager over an already-fetched pass list: shows PAGE_SIZE rows at a
+// time and accepts n/p/a/q plus an optional difficulty filter.  `summary_prefix`
+// is printed before the pager prompt (e.g. the player's name).
+void browse_passes(const std::vector<Json>& passes, const std::string& title);
 // Pass table. Columns are sized from their own content and 谱面 soaks up the
 // remaining `width` columns, so the layout adapts to the terminal.
 void print_passes_to(std::ostream& out, const std::vector<Json>& passes, long long total, int width);

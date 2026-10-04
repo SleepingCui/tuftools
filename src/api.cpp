@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -13,7 +14,14 @@
 
 namespace tuf {
 
-const std::string BASE_URL = "https://api.tuforums.com";
+// Overridable so the tool can be pointed at a mirror, a stub, or a local test
+// server (TUFTOOLS_API_BASE=https://host[:port]).  Read once at startup; an
+// empty value keeps the official endpoint.
+const std::string BASE_URL = [] {
+    const char* override_url = std::getenv("TUFTOOLS_API_BASE");
+    if (override_url != nullptr && *override_url != '\0') return std::string(override_url);
+    return std::string("https://api.tuforums.com");
+}();
 
 namespace {
 

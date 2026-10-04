@@ -106,7 +106,7 @@ HttpResponse http_get(const std::string& url, const std::string& proxy, int time
 
     const std::wstring wide_proxy = to_wide(proxy);
     HandleGuard session(WinHttpOpen(L"tuftools/1.0 (cpp)",
-                                    proxy.empty() ? WINHTTP_ACCESS_TYPE_DEFAULT_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                                    proxy.empty() ? WINHTTP_ACCESS_TYPE_NO_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY,
                                     proxy.empty() ? WINHTTP_NO_PROXY_NAME : wide_proxy.c_str(),
                                     WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session) throw std::runtime_error(winhttp_message("打开会话", url));
