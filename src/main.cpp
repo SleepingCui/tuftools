@@ -50,17 +50,24 @@ int run(int argc, char** argv) {
 
         const std::string choice = tuf::read_trimmed("\n> ");
 
-        if (choice == "1") {
-            tuf::handle_player_lookup();
-        } else if (choice == "2") {
-            tuf::handle_pp_calc();
-        } else if (choice == "3") {
-            tuf::handle_acc_calc();
-        } else if (choice == "q") {
-            std::cout << "exit" << std::endl;
-            break;
-        } else {
-            std::cout << "无效选择" << std::endl;
+        try {
+            if (choice == "1") {
+                tuf::handle_player_lookup();
+            } else if (choice == "2") {
+                tuf::handle_pp_calc();
+            } else if (choice == "3") {
+                tuf::handle_acc_calc();
+            } else if (choice == "q") {
+                std::cout << "exit" << std::endl;
+                break;
+            } else {
+                std::cout << "无效选择" << std::endl;
+            }
+        } catch (const tuf::InputClosed&) {
+            // Piped input ended: let main() turn it into a normal quit.
+            throw;
+        } catch (const std::exception& e) {
+            std::cout << "错误: " << e.what() << std::endl;
         }
     }
 

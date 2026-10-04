@@ -304,6 +304,9 @@ bool xacc_model_save(const XaccModel& model, std::string& error) {
         root.set("schemaVersion", static_cast<long long>(kSchemaVersion));
         root.set("scoreScale", static_cast<long long>(model.score_scale));
         root.set("costScale", static_cast<long long>(model.cost_scale));
+        root.set("maxDpCells", model.max_dp_cells);
+        root.set("maxNodes", model.max_nodes);
+        root.set("maxSeconds", model.max_seconds);
         root.set("_note", kUnitsNote);
         Json weights = Json::object();
         Json costs = Json::object();
@@ -352,6 +355,31 @@ bool parse_v2(const Json& root, XaccModel& model, std::string& error, std::strin
     model.cost_scale = cost_scale.as_int();
     if (model.score_scale <= 0 || model.cost_scale <= 0) {
         error = std::string(XACC_FILE) + " 的 scoreScale / costScale 必须为正";
+        return false;
+    }
+
+
+    const Json max_dp_cells = root.get("maxDpCells");
+    const Json max_nodes = root.get("maxNodes");
+    const Json max_seconds = root.get("maxSeconds");
+    bool budgets_missing = false;
+    for (int which = 0; which < 3; ++which) {
+        const Json& value = which == 0 ? max_dp_cells : (which == 1 ? max_nodes : max_seconds);
+        if (value.is_null()) {
+            budgets_missing = true;
+            continue;
+        }
+        if (!value.is_number()) {
+            error = std::string(XACC_FILE) + " 的求解器预算不是数值: " +
+                    (which == 0 ? "maxDpCells" : (which == 1 ? "maxNodes" : "maxSeconds"));
+            return false;
+        }
+    }
+    if (!max_dp_cells.is_null()) model.max_dp_cells = max_dp_cells.as_int();
+    if (!max_nodes.is_null()) model.max_nodes = max_nodes.as_int();
+    if (!max_seconds.is_null()) model.max_seconds = max_seconds.as_double();
+    if (model.max_dp_cells <= 0 || model.max_nodes <= 0 || !(model.max_seconds > 0.0)) {
+        error = std::string(XACC_FILE) + " 的求解器预算必须为正 (maxDpCells / maxNodes / maxSeconds)";
         return false;
     }
 
@@ -410,17 +438,24 @@ bool parse_v2(const Json& root, XaccModel& model, std::string& error, std::strin
     if (!use_fixed_weights(model, weights_ignored, error)) return false;
     if (!validate_model(model, error)) return false;
 
-    if ((repaired || inexact_note) && note != nullptr) {
-        *note = std::string("注意: ") + XACC_FILE + (repaired ? " 缺少部分判定，已用默认值补齐" : "") +
-                (repaired && inexact_note ? "；" : "") + (inexact_note ? "存在按精度取整的数值" : "");
-    }
-    if (weights_ignored && note != nullptr) {
-        if (!note->empty()) *note += "；";
-        *note += std::string("已忽略 ") + XACC_FILE;
+    if (note != nullptr) {
+        std::vector<std::string> reasons;
+        if (repaired) reasons.push_back("缺少部分判定，已用默认值补齐");
+        if (budgets_missing) reasons.push_back("缺少求解器预算，已用默认值补齐");
+        if (inexact_note) reasons.push_back("存在按精度取整的数值");
+        if (weights_ignored) reasons.push_back("判定权重是固定规则，已忽略文件里的 weights 并改回");
+        if (!reasons.empty()) {
+            if (!note->empty()) *note += "；";
+            *note += std::string("注意: ") + XACC_FILE + " ";
+            for (std::size_t i = 0; i < reasons.size(); ++i) {
+                if (i != 0) *note += "；";
+                *note += reasons[i];
+            }
+        }
     }
     // Rewrite the file when it was missing keys or carried custom weights, so a
     // hand edit cannot stay in the file pretending to be in effect.
-    if (repaired || weights_ignored) {
+    if (repaired || weights_ignored || budgets_missing) {
         std::string save_error;
         if (!xacc_model_save(model, save_error) && note != nullptr) {
             *note += "；" + save_error;
@@ -472,10 +507,9 @@ bool migrate_legacy(XaccModel& model, std::string& error, std::string* note) {
     const bool saved = xacc_model_save(model, save_error);
     if (note != nullptr) {
         if (saved) {
-            *note = std::string("已生成 ") + XACC_FILE + "（整数单位, scoreScale=1/" +
-                    std::to_string(model.score_scale) + "）";
+            *note = std::string("已生成 ") + XACC_FILE;
         } else {
-            *note = save_error + "，本次运行使用内存中的配置";
+            *note = save_error + "，使用内存中的配置";
         }
     }
 

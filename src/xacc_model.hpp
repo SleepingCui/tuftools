@@ -59,12 +59,22 @@ std::int64_t ceil_div_i64(std::int64_t a, std::int64_t b);
 // a / b rounded to nearest, for b > 0.
 std::int64_t round_div_i64(std::int64_t a, std::int64_t b);
 
+// Reverse-search budgets (tgb.md 5E).  They live in xacc.json next to the
+// difficulty coefficients so the menu can edit them the same way, and are shared
+// with XaccReverseOptions so the defaults cannot drift apart.
+constexpr long long kDefaultMaxNodes = 20000000;
+constexpr long long kDefaultMaxDpCells = 8000000;
+constexpr double kDefaultMaxSeconds = 5.0;
+
 // Score unit:  weight = weight_units / score_scale.  An XACC run of `total`
 // notes scores sum(count_i * weight_units_i) / (total * score_scale).
 // Cost unit: cost = cost_units / cost_scale; only ever compared, never divided.
 struct XaccModel {
     XaccScoreUnit score_scale = 1000;
     XaccCostUnit cost_scale = 1000;
+    long long max_dp_cells = kDefaultMaxDpCells;
+    long long max_nodes = kDefaultMaxNodes;
+    double max_seconds = kDefaultMaxSeconds;
     std::vector<std::string> order;  // every key, in costs.json / menu order
     std::map<std::string, XaccScoreUnit> weight_units;
     std::map<std::string, XaccCostUnit> cost_units;

@@ -444,11 +444,14 @@ void acc_run2() {
         fixed_counts[key] = *parsed;
     }
 
-    std::cout << "正在计算...这可能需要一些时间" << std::endl;
+    std::cout << "\n正在计算...这可能需要一些时间" << std::endl;
     std::cout << "求解器: " << xacc_solver_text(g_acc_solver) << std::endl;
 
     XaccReverseOptions options;
     options.solver = g_acc_solver;
+    options.max_nodes = model.max_nodes;
+    options.max_dp_cells = model.max_dp_cells;
+    options.max_seconds = model.max_seconds;
     const XaccReverseResult result = xacc_reverse_search(model, target, total, fixed_counts, xperfect, options);
 
     std::cout << std::endl;
@@ -462,9 +465,7 @@ void acc_run2() {
             std::cout << " " << pad_right(key, 10) << ": " << value << " " << status << std::endl;
         }
 
-        // Show the accuracy the split really reaches instead of rounding it to the
-        // decimals the user typed: 99.29 tells nothing about being 24 score units
-        // short, while 99.289973 does.  Never print fewer decimals than the input.
+
         constexpr int kAccDisplayDecimals = 6;
         const double achieved_acc = xacc_acc_percent(result.score_units, total, model);
         std::string achieved_text = trim_fixed(achieved_acc, kAccDisplayDecimals);
@@ -509,6 +510,94 @@ void acc_run3() {
     }
 }
 
+
+void acc_edit_solver_params() {
+    XaccModel model;
+    if (!acc_load_model(model)) return;
+
+    std::cout << "如果你不知道这些参数的含义，请不要修改\n" << std::endl;
+    std::cout << "求解器参数:" << std::endl;
+    std::cout << " " << pad_right("max_dp_cells", 12) << ": " << model.max_dp_cells << std::endl;
+    std::cout << " " << pad_right("max_nodes", 12) << ": " << model.max_nodes << std::endl;
+    std::cout << " " << pad_right("max_seconds", 12) << ": " << py_float_str(model.max_seconds) << std::endl;
+    std::cout << " " << pad_right("cost_scale", 12) << ": " << model.cost_scale << std::endl;
+    std::cout << std::endl;
+
+    bool modified = false;
+
+    const std::string dp_cells = read_trimmed("max_dp_cells [" + std::to_string(model.max_dp_cells) + "]: ");
+    if (!dp_cells.empty()) {
+        const std::optional<long long> parsed = try_parse_int(dp_cells);
+        if (!parsed.has_value() || *parsed <= 0) {
+            std::cout << "输入无效，max_dp_cells 保持原值" << std::endl;
+        } else {
+            model.max_dp_cells = *parsed;
+            modified = true;
+        }
+    }
+
+    const std::string nodes = read_trimmed("max_nodes [" + std::to_string(model.max_nodes) + "]: ");
+    if (!nodes.empty()) {
+        const std::optional<long long> parsed = try_parse_int(nodes);
+        if (!parsed.has_value() || *parsed <= 0) {
+            std::cout << "输入无效，max_nodes 保持原值" << std::endl;
+        } else {
+            model.max_nodes = *parsed;
+            modified = true;
+        }
+    }
+
+    const std::string seconds = read_trimmed("max_seconds [" + py_float_str(model.max_seconds) + "]: ");
+    if (!seconds.empty()) {
+        const std::optional<double> parsed = try_parse_double(seconds);
+        if (!parsed.has_value() || !(*parsed > 0.0) || *parsed > 86400.0) {
+            std::cout << "输入无效，max_seconds 保持原值" << std::endl;
+        } else {
+            model.max_seconds = *parsed;
+            modified = true;
+        }
+    }
+
+    const std::string scale = read_trimmed("cost_scale [" + std::to_string(model.cost_scale) + "]: ");
+    if (!scale.empty()) {
+        const std::optional<long long> parsed = try_parse_int(scale);
+        if (!parsed.has_value() || *parsed <= 0) {
+            std::cout << "输入无效，cost_scale 保持原值" << std::endl;
+        } else if (*parsed != model.cost_scale) {
+
+            const long double factor = static_cast<long double>(*parsed) / static_cast<long double>(model.cost_scale);
+            bool rounded = false;
+            for (std::pair<const std::string, XaccCostUnit>& entry : model.cost_units) {
+                const long double scaled = static_cast<long double>(entry.second) * factor;
+                if (scaled > 9.0e15L) {
+                    entry.second = 9000000000000000LL;
+                    rounded = true;
+                    continue;
+                }
+                const long long value = std::llround(scaled);
+                if (std::fabs(scaled - static_cast<long double>(value)) > 1.0e-6L) rounded = true;
+                entry.second = value;
+            }
+            model.cost_scale = *parsed;
+            std::cout << "已按 1/" << model.cost_scale << " 换算各判定难度系数"
+                      << (rounded ? "（部分系数按新精度取整）" : "") << std::endl;
+            modified = true;
+        }
+    }
+
+    if (!modified) {
+        std::cout << "Not modified" << std::endl;
+        return;
+    }
+
+    std::string error;
+    if (xacc_model_save(model, error)) {
+        std::cout << "保存成功" << std::endl;
+    } else {
+        std::cout << "保存失败: " << error << std::endl;
+    }
+}
+
 }  // namespace
 
 void handle_acc_calc() {
@@ -519,6 +608,7 @@ void handle_acc_calc() {
         std::cout << "2. 根据 XACC 推算判定" << std::endl;
         std::cout << "3. 自定义难度系数" << std::endl;
         std::cout << "4. 选择求解器 (当前: " << xacc_solver_text(g_acc_solver) << ")" << std::endl;
+        std::cout << "5. 编辑求解器参数" << std::endl;
         std::cout << "b. 返回主菜单" << std::endl;
 
         const std::string choice = read_trimmed("> ");
@@ -531,6 +621,8 @@ void handle_acc_calc() {
             acc_run3();
         } else if (choice == "4") {
             acc_choose_solver();
+        } else if (choice == "5") {
+            acc_edit_solver_params();
         } else if (choice == "b") {
             break;
         } else {

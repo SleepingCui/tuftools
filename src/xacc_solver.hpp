@@ -28,10 +28,11 @@ struct XaccReverseOptions {
     XaccSolver solver = XaccSolver::automatic;
     // Observable budgets (tgb.md 5E).  Exceeding one never changes the answer
     // silently: the result is either flagged as approximate or reports that the
-    // budget ran out.
-    long long max_nodes = 20000000;
-    long long max_dp_cells = 8000000;
-    double max_seconds = 5.0;
+    // budget ran out.  The menu fills these from XaccModel, so these are only the
+    // fallback for callers that build the options themselves.
+    long long max_nodes = kDefaultMaxNodes;
+    long long max_dp_cells = kDefaultMaxDpCells;
+    double max_seconds = kDefaultMaxSeconds;
 };
 
 struct XaccReverseResult {

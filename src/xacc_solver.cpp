@@ -296,7 +296,7 @@ XaccReverseResult Search::build_result(const Candidate& best, bool optimal, Xacc
                          std::to_string(target_.decimals) + " 位小数，已返回最接近的组合";
     }
     if (!optimal) {
-        result.note = "预算耗尽";
+        result.note = "预算耗尽,结果未证明最优";
     }
     return result;
 }
