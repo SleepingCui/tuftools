@@ -50,14 +50,6 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 function Resolve-Gxx {
     $cmd = Get-Command g++ -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    $candidates = @(
-        "D:\Program Files\x86_64-15.2.0-release-posix-seh-ucrt-rt_v13-rev1\mingw64\bin\g++.exe",
-        "C:\mingw64\bin\g++.exe",
-        "C:\msys64\mingw64\bin\g++.exe"
-    )
-    foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) { return $candidate }
-    }
     throw "g++ was not found. Install MinGW-w64 and add its bin directory to PATH."
 }
 
