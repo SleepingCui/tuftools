@@ -1,4 +1,4 @@
-#include "xacc_solver.hpp"
+﻿#include "xacc_solver.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1315,13 +1315,6 @@ XaccEquivalentSet xacc_equivalents(const XaccModel& model, const XaccTarget& tar
         out.message = "目标低于最低可达分数";
         return out;
     }
-    const std::int64_t target_loss = target_units - base_score_all;
-    if (target_loss % divisor != 0) {
-        out.status = XaccStatus::unreachable;
-        out.message = "目标与可达格点不对齐";
-        return out;
-    }
-
     // Dense DP over layers, keeping the cheapest (cost, non-base) per cell.
     std::vector<std::size_t> offsets(static_cast<std::size_t>(free_notes) + 2, 0);
     std::size_t total_cells = 1;  // layer 0 holds the single loss-0 cell
