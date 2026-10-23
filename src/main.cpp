@@ -49,9 +49,10 @@ int run(int argc, char** argv) {
     while (true) {
         std::cout << "\n选择功能系统" << std::endl;
         std::cout << "1. 玩家数据查询" << std::endl;
-        std::cout << "2. PP计算器" << std::endl;
-        std::cout << "3. XACC计算器" << std::endl;
-        std::cout << "4. 清空缓存" << std::endl;
+        std::cout << "2. 谱面查询" << std::endl;
+        std::cout << "3. PP计算器" << std::endl;
+        std::cout << "4. XACC计算器" << std::endl;
+        std::cout << "5. 清空缓存" << std::endl;
         std::cout << "q. 退出" << std::endl;
 
         const std::string choice = tuf::read_trimmed("\n> ");
@@ -60,10 +61,12 @@ int run(int argc, char** argv) {
             if (choice == "1") {
                 tuf::handle_player_lookup();
             } else if (choice == "2") {
-                tuf::handle_pp_calc();
+                tuf::handle_level_lookup();
             } else if (choice == "3") {
-                tuf::handle_acc_calc();
+                tuf::handle_pp_calc();
             } else if (choice == "4") {
+                tuf::handle_acc_calc();
+            } else if (choice == "5") {
                 if (no_cache) {
                     std::cout << "已启用 --no-cache，本次运行不会读写缓存" << std::endl;
                 } else {

@@ -1,8 +1,11 @@
 #include "menus.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -12,7 +15,9 @@
 #include <vector>
 
 #include "api.hpp"
+#include "apppaths.hpp"
 #include "console.hpp"
+#include "http.hpp"
 #include "info.hpp"
 #include "pyjson.hpp"
 #include "numfmt.hpp"
@@ -46,7 +51,7 @@ RankVal as_one_if_zero(RankVal value) { return value.is_zero() ? RankVal::from_n
 
 std::string float_of(const Json& value) { return value.key_text(); }
 
-Json search_level_for_pp() {
+Json search_level() {
     constexpr long long kSearchLimit = 10;
     while (true) {
         const std::string query = read_trimmed("输入谱面名或 ID（回车取消）: ");
@@ -108,6 +113,508 @@ Json search_level_for_pp() {
             return levels[static_cast<size_t>(*index - 1)];
         }
     }
+}
+
+std::string join_csv(const std::vector<std::string>& values) {
+    std::string out;
+    for (const std::string& value : values) {
+        if (!out.empty()) out += ',';
+        out += value;
+    }
+    return out;
+}
+
+using TransformParams = std::vector<std::pair<std::string, std::string>>;
+
+struct TransformPreset {
+    std::string name;
+    TransformParams params;
+};
+
+bool select_option_names(const std::string& title, const std::vector<std::string>& names,
+                         std::vector<std::string>& selected) {
+    if (names.empty()) return true;
+    std::cout << title << std::endl;
+    for (size_t i = 0; i < names.size(); ++i) std::cout << "[" << (i + 1) << "] " << names[i] << std::endl;
+    const std::string input = read_trimmed("输入序号（空格分隔）、all 全选，或回车跳过: ");
+    if (input.empty()) return true;
+    if (lower_ascii(input) == "all") {
+        selected = names;
+        return true;
+    }
+    std::istringstream stream(input);
+    std::string token;
+    std::vector<bool> seen(names.size(), false);
+    while (stream >> token) {
+        const std::optional<long long> index = try_parse_int(token);
+        if (!index || *index < 1 || static_cast<size_t>(*index) > names.size()) {
+            std::cout << "序号无效，请按列表输入 1 到 " << names.size() << " 之间的序号。" << std::endl;
+            selected.clear();
+            return false;
+        }
+        if (!seen[static_cast<size_t>(*index - 1)]) {
+            selected.push_back(names[static_cast<size_t>(*index - 1)]);
+            seen[static_cast<size_t>(*index - 1)] = true;
+        }
+    }
+    return true;
+}
+
+std::vector<std::string> json_strings(const std::vector<Json>& values) {
+    std::vector<std::string> result;
+    for (const Json& value : values) if (value.is_string()) result.push_back(value.as_string());
+    return result;
+}
+
+bool load_transform_presets(std::vector<TransformPreset>& presets) {
+    std::ifstream input(data_file("transform_presets.json"), std::ios::binary);
+    if (!input.good()) return true;
+    try {
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        const Json root = Json::parse(buffer.str());
+        for (const Json& item : root.elements()) {
+            if (presets.size() == 5) break;
+            if (!item.is_object() || !item.get("name").is_string() || !item.get("params").is_object()) continue;
+            TransformPreset preset;
+            preset.name = item.get("name").as_string();
+            for (const auto& param : item.get("params").items()) {
+                if (param.second.is_string()) preset.params.emplace_back(param.first, param.second.as_string());
+            }
+            if (!preset.name.empty()) presets.push_back(std::move(preset));
+        }
+        return true;
+    } catch (const std::exception& e) {
+        std::cout << "读取自定义预设失败: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool save_transform_presets(const std::vector<TransformPreset>& presets) {
+    Json::Array entries;
+    for (const TransformPreset& preset : presets) {
+        Json item = Json::object();
+        item.set("name", Json(preset.name));
+        Json params = Json::object();
+        for (const auto& param : preset.params) params.set(param.first, Json(param.second));
+        item.set("params", params);
+        entries.push_back(item);
+    }
+    std::ofstream output(data_file("transform_presets.json"), std::ios::binary | std::ios::trunc);
+    if (!output.good()) {
+        std::cout << "无法保存自定义预设。" << std::endl;
+        return false;
+    }
+    output << Json::array(entries).dump(2);
+    if (!output.good()) std::cout << "保存自定义预设失败。" << std::endl;
+    return output.good();
+}
+
+bool build_custom_transform_params(const Json& options, TransformParams& params) {
+    params.clear();
+    const std::vector<std::string> event_types = json_strings(options.get("eventTypes").elements());
+    const std::string event_mode = lower_ascii(read_trimmed("事件处理 (d 删除指定事件 / k 只保留指定事件 / 回车跳过): "));
+    if (event_mode == "d" || event_mode == "k") {
+        std::vector<std::string> events;
+        if (!select_option_names("可选事件:", event_types, events)) return false;
+        if (!events.empty()) params.emplace_back(event_mode == "d" ? "dropEvents" : "keepEvents", join_csv(events));
+    } else if (!event_mode.empty()) {
+        std::cout << "事件处理选项无效。" << std::endl;
+        return false;
+    }
+
+    const std::string zoom_input = read_trimmed("相机缩放 baseCameraZoom（0.1-10，回车保持默认）: ");
+    if (!zoom_input.empty()) {
+        const std::optional<double> zoom = try_parse_double(zoom_input);
+        if (!zoom.has_value() || *zoom < 0.1 || *zoom > 10.0) {
+            std::cout << "相机缩放必须在 0.1 到 10 之间。" << std::endl;
+            return false;
+        }
+        params.emplace_back("baseCameraZoom", py_float_str(*zoom));
+    }
+
+    std::string background = read_trimmed("自定义背景色 RGB（例如 #112233，回车跳过）: ");
+    if (!background.empty()) {
+        if (background.front() == '#') background.erase(background.begin());
+        if (background.size() != 6 || !std::all_of(background.begin(), background.end(), [](unsigned char c) {
+                return std::isxdigit(c) != 0;
+            })) {
+            std::cout << "背景色需要是 6 位十六进制 RGB。" << std::endl;
+            return false;
+        }
+        long long opacity = 100;
+        const std::string opacity_input = read_trimmed("背景不透明度百分比（0-100，默认100）: ");
+        if (!opacity_input.empty()) {
+            const std::optional<long long> parsed = try_parse_int(opacity_input);
+            if (!parsed.has_value() || *parsed < 0 || *parsed > 100) {
+                std::cout << "不透明度必须在 0 到 100 之间。" << std::endl;
+                return false;
+            }
+            opacity = *parsed;
+        }
+        static const char* hex = "0123456789abcdef";
+        const unsigned int alpha = static_cast<unsigned int>((opacity * 255 + 50) / 100);
+        background += hex[(alpha >> 4) & 0xF];
+        background += hex[alpha & 0xF];
+        params.emplace_back("constantBackgroundColor", background);
+    }
+
+    if (lower_ascii(read_trimmed("移除前景闪光？(y/N): ")) == "y") params.emplace_back("removeForegroundFlash", "true");
+
+    std::vector<std::string> filter_names = json_strings(options.get("filterTypes").elements());
+    const std::vector<std::string> advanced = json_strings(options.get("advancedFilterTypes").elements());
+    filter_names.insert(filter_names.end(), advanced.begin(), advanced.end());
+    std::vector<std::string> filters;
+    if (!select_option_names("可删除滤镜:", filter_names, filters)) return false;
+    if (!filters.empty()) params.emplace_back("dropFilters", join_csv(filters));
+    return true;
+}
+
+void show_transform_params(const TransformPreset& preset) {
+    std::cout << preset.name << ":" << std::endl;
+    if (preset.params.empty()) std::cout << "  （无转换参数）" << std::endl;
+    for (const auto& param : preset.params) std::cout << "  " << param.first << " = " << param.second << std::endl;
+}
+
+void manage_transform_presets(const Json& options, std::vector<TransformPreset>& presets) {
+    while (true) {
+        std::cout << "\n自定义转换预设（" << presets.size() << "/5）" << std::endl;
+        std::cout << "持久化文件: " << data_file("transform_presets.json") << std::endl;
+        if (presets.empty()) std::cout << "（暂无预设）" << std::endl;
+        for (size_t i = 0; i < presets.size(); ++i) std::cout << "[" << (i + 1) << "] " << presets[i].name << std::endl;
+        std::cout << "a 添加 | v 序号查看 | e 序号修改 | d 序号删除 | q 返回" << std::endl;
+        const std::string command = read_trimmed("操作: ");
+        if (command.empty() || lower_ascii(command) == "q") return;
+        std::istringstream input(command);
+        std::string action, index_text;
+        input >> action >> index_text;
+        action = lower_ascii(action);
+        if (action == "a") {
+            if (presets.size() >= 5) { std::cout << "最多保存 5 条自定义预设。" << std::endl; continue; }
+            const std::string name = read_trimmed("预设名称: ");
+            if (name.empty()) { std::cout << "名称不能为空。" << std::endl; continue; }
+            TransformPreset preset;
+            preset.name = name;
+            if (!build_custom_transform_params(options, preset.params)) continue;
+            presets.push_back(std::move(preset));
+            save_transform_presets(presets);
+        } else if (action == "v" || action == "e" || action == "d") {
+            const std::optional<long long> index = try_parse_int(index_text);
+            if (!index || *index < 1 || static_cast<size_t>(*index) > presets.size()) {
+                std::cout << "请输入有效序号，例如 v 1。" << std::endl;
+                continue;
+            }
+            const size_t at = static_cast<size_t>(*index - 1);
+            if (action == "v") show_transform_params(presets[at]);
+            else if (action == "d") {
+                std::cout << "已删除预设: " << presets[at].name << std::endl;
+                presets.erase(presets.begin() + static_cast<std::ptrdiff_t>(at));
+                save_transform_presets(presets);
+            } else {
+                std::string name = read_trimmed("新名称（回车保留当前名称）: ");
+                TransformPreset edited = presets[at];
+                if (!name.empty()) edited.name = name;
+                if (!build_custom_transform_params(options, edited.params)) continue;
+                presets[at] = std::move(edited);
+                save_transform_presets(presets);
+            }
+        } else {
+            std::cout << "操作无效。" << std::endl;
+        }
+    }
+}
+
+std::string transform_zip_url(const std::string& file_id, const TransformParams& params) {
+    std::string url = BASE_URL + "/cdn/levels/" + url_quote(file_id) + "/transform?format=zip";
+    for (const auto& param : params) url += "&" + param.first + "=" + url_quote(param.second);
+    return url;
+}
+
+std::string safe_level_filename(const Json& level, const std::string& suffix) {
+    std::string name = "TUF_Level_" + level.get("id").key_text() + suffix;
+    for (char& c : name) {
+        if (c == '<' || c == '>' || c == ':' || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
+            c = '_';
+        }
+    }
+    return name;
+}
+
+void save_download(const std::string& url, const std::string& filename, bool expect_zip) {
+    if (url.empty()) {
+        std::cout << "该下载选项没有可用的链接。" << std::endl;
+        return;
+    }
+    const std::filesystem::path default_path = std::filesystem::current_path() / filename;
+    std::cout << "默认保存位置: " << default_path.u8string() << std::endl;
+    const std::string path_input = read_trimmed("保存路径（回车使用默认位置）: ");
+    std::filesystem::path output_path =
+        path_input.empty() ? default_path : std::filesystem::u8path(path_input);
+
+    std::error_code fs_error;
+    const std::filesystem::path parent = output_path.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, fs_error);
+        if (fs_error) {
+            std::cout << "无法创建保存目录: " << fs_error.message() << std::endl;
+            return;
+        }
+    }
+    const bool file_exists = std::filesystem::exists(output_path, fs_error);
+    if (fs_error) {
+        std::cout << "无法检查目标文件: " << fs_error.message() << std::endl;
+        return;
+    }
+    if (file_exists) {
+        const std::filesystem::path parent = output_path.parent_path();
+        const std::string stem = output_path.stem().u8string();
+        const std::string extension = output_path.extension().u8string();
+        for (std::uint64_t suffix = 1;; ++suffix) {
+            const std::filesystem::path candidate =
+                parent / std::filesystem::u8path(stem + "_" + std::to_string(suffix) + extension);
+            const bool candidate_exists = std::filesystem::exists(candidate, fs_error);
+            if (fs_error) {
+                std::cout << "无法检查目标文件: " << fs_error.message() << std::endl;
+                return;
+            }
+            if (!candidate_exists) {
+                output_path = candidate;
+                break;
+            }
+        }
+        std::cout << "文件已存在，改为保存到: " << output_path.u8string() << std::endl;
+    }
+
+    try {
+        int last_percent = -1;
+        std::uint64_t last_progress_bytes = 0;
+        std::uint64_t sample_bytes = 0;
+        double smoothed_bytes_per_second = 0.0;
+        auto sample_time = std::chrono::steady_clock::now();
+        auto transfer_start = sample_time;
+        bool transfer_started = false;
+        const HttpProgressCallback progress = [&](std::uint64_t downloaded, std::uint64_t total) {
+            const auto now = std::chrono::steady_clock::now();
+            if (downloaded > 0 && !transfer_started) {
+                transfer_started = true;
+                transfer_start = now;
+                sample_time = now;
+                sample_bytes = downloaded;
+            } else if (transfer_started && downloaded > sample_bytes) {
+                const double elapsed = std::chrono::duration<double>(now - sample_time).count();
+                if (elapsed > 0.0) {
+                    const double current_speed = static_cast<double>(downloaded - sample_bytes) / elapsed;
+                    smoothed_bytes_per_second = smoothed_bytes_per_second == 0.0
+                        ? current_speed : (smoothed_bytes_per_second * 0.65 + current_speed * 0.35);
+                }
+                sample_bytes = downloaded;
+                sample_time = now;
+            }
+            const double elapsed_total = transfer_started
+                ? std::chrono::duration<double>(now - transfer_start).count() : 0.0;
+            const double average_speed = elapsed_total > 0.0
+                ? static_cast<double>(downloaded) / elapsed_total : 0.0;
+            const double speed = smoothed_bytes_per_second > 0.0 ? smoothed_bytes_per_second : average_speed;
+            std::ostringstream status;
+            if (total > 0) {
+                const int percent = static_cast<int>((downloaded * 100) / total);
+                if (percent == last_percent && downloaded < total) return;
+                last_percent = percent;
+                status << "下载进度: " << percent << "% (" << format_fixed(downloaded / 1048576.0, 2)
+                       << " / " << format_fixed(total / 1048576.0, 2) << " MiB)";
+                if (speed > 0.0) {
+                    status << " | 速度: " << format_fixed(speed / 1048576.0, 2) << " MiB/s";
+                    const double remaining_seconds = downloaded >= total ? 0.0 : (total - downloaded) / speed;
+                    const long long eta = static_cast<long long>(std::ceil(remaining_seconds));
+                    const long long hours = eta / 3600;
+                    const long long minutes = (eta % 3600) / 60;
+                    const long long seconds = eta % 60;
+                    status << " | ETA: ";
+                    if (hours > 0) status << hours << "小时" << minutes << "分" << seconds << "秒";
+                    else if (minutes > 0) status << minutes << "分" << seconds << "秒";
+                    else status << seconds << "秒";
+                } else {
+                    status << " | 速度: 计算中 | ETA: 计算中";
+                }
+            } else if (downloaded == 0 || downloaded - last_progress_bytes >= 512 * 1024) {
+                last_progress_bytes = downloaded;
+                status << "已下载: " << format_fixed(downloaded / 1048576.0, 2) << " MiB";
+                if (speed > 0.0) status << " | 速度: " << format_fixed(speed / 1048576.0, 2) << " KiB/s | ETA: 未知（总大小未知）";
+                else status << " | 速度: 计算中 | ETA: 未知（总大小未知）";
+            } else {
+                return;
+            }
+            std::cout << "\r" << status.str() << std::flush;
+        };
+        std::cout << "正在请求文件；转换下载可能需要等待服务器生成文件..." << std::endl;
+        const HttpResponse response = http_get(url, active_proxy(), 60, progress);
+        progress(static_cast<std::uint64_t>(response.body.size()),
+                 static_cast<std::uint64_t>(response.body.size()));
+        std::cout << std::endl;
+        if (response.body.empty()) {
+            std::cout << "下载失败：服务器返回了空文件。" << std::endl;
+            return;
+        }
+        if (expect_zip && (response.body.size() < 4 || response.body[0] != 'P' || response.body[1] != 'K')) {
+            std::cout << "下载失败：服务器返回内容不是有效的 ZIP 谱面文件。" << std::endl;
+            return;
+        }
+        std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
+        if (!output.good()) {
+            std::cout << "无法写入文件: " << output_path.u8string() << std::endl;
+            return;
+        }
+        output.write(response.body.data(), static_cast<std::streamsize>(response.body.size()));
+        output.close();
+        if (!output.good()) {
+            std::filesystem::remove(output_path, fs_error);
+            std::cout << "写入文件失败: " << output_path.u8string() << std::endl;
+            return;
+        }
+        std::cout << "下载完成: " << output_path.u8string() << " (" << response.body.size() << " bytes)"
+                  << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << std::endl << "下载失败: " << e.what() << std::endl;
+    }
+}
+
+void download_level_chart(const Json& level) {
+    const std::string level_id = level.get("id").key_text();
+    const std::string file_id = level.get("fileId").as_string();
+    const std::string original_url = level.get("dlLink").as_string();
+    if (original_url.empty()) {
+        std::cout << "该谱面没有可用的下载链接。" << std::endl;
+        return;
+    }
+
+    Json cdn_data;
+    try {
+        cdn_data = fetchapi_sync(BASE_URL + "/v2/database/levels/" + url_quote(level_id) + "/cdnData");
+    } catch (const std::exception& e) {
+        std::cout << "读取转换选项失败: " << e.what() << "\n仍可下载原始 ZIP。" << std::endl;
+    }
+    const Json metadata = cdn_data.get("metadata");
+    const Json transform_options = cdn_data.get("transformOptions");
+    const bool can_transform = metadata.is_object() && transform_options.is_object() &&
+                               !metadata.get("transformUnavailable").truthy();
+    const bool can_download_v2 = can_transform && transform_options.get("version").as_int() >= 18;
+
+    std::cout << "下载方式:" << std::endl;
+    std::cout << "1. 原始 ZIP" << std::endl;
+    if (can_transform) std::cout << "2. 转换 ZIP" << std::endl;
+    if (can_download_v2) std::cout << "3. V2 .adofai" << std::endl;
+    const std::string download_mode = read_trimmed("选择下载方式（回车取消）: ");
+    if (download_mode.empty()) return;
+
+    if (download_mode == "1") {
+        save_download(original_url, safe_level_filename(level, ".zip"), true);
+        return;
+    }
+    if (download_mode == "3" && can_download_v2) {
+        if (file_id.empty()) {
+            std::cout << "谱面缺少 CDN fileId，无法下载 V2 文件。" << std::endl;
+            return;
+        }
+        save_download(BASE_URL + "/cdn/levels/" + url_quote(file_id) + "/level-v2.adofai",
+                      safe_level_filename(level, ".adofai"), false);
+        return;
+    }
+    if (download_mode != "2" || !can_transform) {
+        std::cout << "下载方式无效或当前谱面不支持。" << std::endl;
+        return;
+    }
+    if (file_id.empty()) {
+        std::cout << "谱面缺少 CDN fileId，无法转换。" << std::endl;
+        return;
+    }
+
+    std::vector<TransformPreset> stored_presets;
+    load_transform_presets(stored_presets);
+    while (true) {
+        std::cout << "转换 ZIP 预设:" << std::endl;
+        std::cout << "1. 推荐低特效（只保留 PositionTrack、RecolorTrack、ColorTrack、MoveTrack）" << std::endl;
+        std::cout << "2. 推荐低特效+运镜（只保留 PositionTrack、RecolorTrack、ColorTrack、MoveCamera、RepeatEvents、MoveTrack）"
+                  << std::endl;
+        std::cout << "3. 删装饰（删除 AddDecoration）" << std::endl;
+        std::cout << "4. 删装饰和滤镜（删除 AddDecoration 和 SetFilter）" << std::endl;
+        std::cout << "5. 去全部特效（只保留 PositionTrack）" << std::endl;
+        std::cout << "6. 自定义" << std::endl;
+        for (size_t i = 0; i < stored_presets.size(); ++i) {
+            std::cout << (i + 7) << ". 自定义预设: " << stored_presets[i].name << std::endl;
+        }
+        std::cout << "m. 管理自定义预设（最多 5 条）" << std::endl;
+        const std::string preset = read_trimmed("选择转换方式（回车取消）: ");
+        if (preset.empty()) return;
+        if (lower_ascii(preset) == "m") {
+            manage_transform_presets(transform_options, stored_presets);
+            continue;
+        }
+
+        TransformParams params;
+        if (preset == "1") {
+            params.emplace_back("keepEvents", "PositionTrack,RecolorTrack,ColorTrack,MoveTrack");
+        } else if (preset == "2") {
+            params.emplace_back("keepEvents", "PositionTrack,RecolorTrack,ColorTrack,MoveCamera,RepeatEvents,MoveTrack");
+        } else if (preset == "3") {
+            params.emplace_back("dropEvents", "AddDecoration");
+        } else if (preset == "4") {
+            params.emplace_back("dropEvents", "AddDecoration,SetFilter");
+        } else if (preset == "5") {
+            params.emplace_back("keepEvents", "PositionTrack");
+        } else if (preset == "6") {
+            if (!build_custom_transform_params(transform_options, params)) continue;
+        } else {
+            const std::optional<long long> index = try_parse_int(preset);
+            if (!index || *index < 7 || static_cast<size_t>(*index - 7) >= stored_presets.size()) {
+                std::cout << "无效选择。" << std::endl;
+                continue;
+            }
+            params = stored_presets[static_cast<size_t>(*index - 7)].params;
+        }
+        save_download(transform_zip_url(file_id, params), safe_level_filename(level, "_converted.zip"), true);
+        return;
+    }
+}
+
+void print_level_details(const Json& level) {
+    const Json& difficulty = level.get("difficulty");
+    std::cout << "\n谱面详情" << std::endl;
+    std::cout << "ID: " << level.get("id").key_text() << std::endl;
+    std::cout << "歌曲: " << level.get("song").as_string() << std::endl;
+    std::cout << "艺术家: " << level.get("artist").as_string() << std::endl;
+    if (!level.get("suffix").is_null()) std::cout << "后缀: " << level.get("suffix").as_string() << std::endl;
+    std::cout << "难度: " << difficulty.get("name").as_string() << std::endl;
+    std::cout << "谱师/制作团队: " << level.get("creator").as_string() << std::endl;
+    std::cout << "BaseScore: " << level.get("baseScore").key_text()
+              << " | PP BaseScore: " << level.get("ppBaseScore").key_text()
+              << " | 难度 BaseScore: " << difficulty.get("baseScore").key_text() << std::endl;
+    std::cout << "BPM: " << level.get("bpm").key_text() << " | 砖块数: " << level.get("tilecount").key_text()
+              << " | 时长(ms): " << level.get("levelLengthInMs").key_text() << std::endl;
+    std::cout << "通关数: " << level.get("clears").key_text()
+              << " | 独立通关玩家数: " << level.get("uniqueClears").key_text()
+              << " | 下载数: " << level.get("downloadCount").key_text()
+              << " | 收藏数: " << level.get("likes").key_text() << std::endl;
+    if (!level.get("videoLink").as_string().empty()) {
+        std::cout << "视频: " << level.get("videoLink").as_string() << std::endl;
+    }
+    if (!level.get("workshopLink").as_string().empty()) {
+        std::cout << "创意工坊: " << level.get("workshopLink").as_string() << std::endl;
+    }
+    const std::vector<Json> tags = level.get("tags").elements();
+    if (!tags.empty()) {
+        std::cout << "标签: ";
+        for (size_t i = 0; i < tags.size(); ++i) {
+            if (i != 0) std::cout << ", ";
+            std::cout << tags[i].get("name").as_string();
+        }
+        std::cout << std::endl;
+    }
+    const Json description_value = level.get("description");
+    if (description_value.is_string() && !description_value.as_string().empty()) {
+        std::cout << "简介: " << description_value.as_string() << std::endl;
+    }
+    const std::string notes = level.get("notes").as_string();
+    if (!notes.empty()) std::cout << "备注: " << notes << std::endl;
 }
 
 constexpr size_t kRankedScoreLimit = 20;
@@ -332,7 +839,7 @@ void handle_pp_calc() {
         }
         difficulty = upper_ascii(read_trimmed("难度: "));
     } else if (base_mode == "2") {
-        selected_level = search_level_for_pp();
+        selected_level = search_level();
         if (selected_level.is_null()) return;
     } else if (base_mode == "3") {
         const std::optional<double> parsed = try_parse_double(read_trimmed("BaseScore: "));
@@ -443,6 +950,16 @@ void handle_pp_calc() {
 
     std::cout << std::endl;
     stats();
+}
+
+void handle_level_lookup() {
+    const Json level = search_level();
+    if (level.is_null()) return;
+
+    print_level_details(level);
+    if (lower_ascii(read_trimmed("\n下载该谱面？(y/N): ")) == "y") {
+        download_level_chart(level);
+    }
 }
 
 // ============================================================ acccalc.py ====

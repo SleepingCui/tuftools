@@ -81,7 +81,8 @@ std::string http_reason_from_status(int status) {
     }
 }
 
-HttpResponse http_get(const std::string& url, const std::string& proxy, int timeout_sec) {
+HttpResponse http_get(const std::string& url, const std::string& proxy, int timeout_sec,
+                      const HttpProgressCallback& progress) {
     HttpResponse response;
 
     const std::wstring wide_url = to_wide(url);
@@ -155,6 +156,21 @@ HttpResponse http_get(const std::string& url, const std::string& proxy, int time
     }
     if (response.reason.empty()) response.reason = http_reason_from_status(response.status);
 
+    std::uint64_t content_length = 0;
+    DWORD content_length_value = 0;
+    DWORD content_length_size = sizeof(content_length_value);
+    if (WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &content_length_value, &content_length_size,
+                            WINHTTP_NO_HEADER_INDEX)) {
+        content_length = content_length_value;
+    }
+    if (progress) {
+        try {
+            progress(0, content_length);
+        } catch (...) {
+        }
+    }
+
     std::vector<char> buffer(8192);
     for (;;) {
         DWORD read = 0;
@@ -163,6 +179,12 @@ HttpResponse http_get(const std::string& url, const std::string& proxy, int time
         }
         if (read == 0) break;
         response.body.append(buffer.data(), read);
+        if (progress) {
+            try {
+                progress(static_cast<std::uint64_t>(response.body.size()), content_length);
+            } catch (...) {
+            }
+        }
     }
 
     if (response.status >= 400) {
@@ -199,6 +221,18 @@ size_t write_body(char* data, size_t size, size_t nmemb, void* userdata) {
     return size * nmemb;
 }
 
+int report_progress(void* userdata, curl_off_t download_total, curl_off_t downloaded, curl_off_t, curl_off_t) {
+    const auto* callback = static_cast<const HttpProgressCallback*>(userdata);
+    if (callback == nullptr || !*callback) return 0;
+    try {
+        (*callback)(downloaded > 0 ? static_cast<std::uint64_t>(downloaded) : 0,
+                    download_total > 0 ? static_cast<std::uint64_t>(download_total) : 0);
+    } catch (...) {
+        // Never allow a progress display exception to cross libcurl's C callback.
+    }
+    return 0;
+}
+
 }  // namespace
 
 std::string http_reason_from_status(int status) {
@@ -210,7 +244,8 @@ std::string http_reason_from_status(int status) {
     return std::string();
 }
 
-HttpResponse http_get(const std::string& url, const std::string& proxy, int timeout_sec) {
+HttpResponse http_get(const std::string& url, const std::string& proxy, int timeout_sec,
+                      const HttpProgressCallback& progress) {
     ensure_curl_global_init();
 
     CURL* handle = curl_easy_init();
@@ -230,6 +265,11 @@ HttpResponse http_get(const std::string& url, const std::string& proxy, int time
     curl_easy_setopt(handle, CURLOPT_ACCEPT_ENCODING, "");  // ask libcurl to request/decompress gzip etc.
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_body);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
+    if (progress) {
+        curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, report_progress);
+        curl_easy_setopt(handle, CURLOPT_XFERINFODATA, &progress);
+    }
     curl_easy_setopt(handle, CURLOPT_TIMEOUT, static_cast<long>(timeout_sec));
     curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer);
     if (!proxy.empty()) curl_easy_setopt(handle, CURLOPT_PROXY, proxy.c_str());

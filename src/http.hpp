@@ -3,6 +3,8 @@
 #pragma once
 
 #include <stdexcept>
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -28,7 +30,10 @@ private:
 };
 
 // Throws std::runtime_error on transport failure, HttpError on status >= 400.
-HttpResponse http_get(const std::string& url, const std::string& proxy = std::string(), int timeout_sec = 30);
+using HttpProgressCallback = std::function<void(std::uint64_t downloaded, std::uint64_t total)>;
+
+HttpResponse http_get(const std::string& url, const std::string& proxy = std::string(), int timeout_sec = 30,
+                      const HttpProgressCallback& progress = HttpProgressCallback());
 
 std::string http_reason_from_status(int status);
 

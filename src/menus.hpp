@@ -14,4 +14,7 @@ void handle_pp_calc();
 // acccalc.handle_acc_calc()
 void handle_acc_calc();
 
+// Search for a level, show its metadata, and optionally download its chart file.
+void handle_level_lookup();
+
 }  // namespace tuf
