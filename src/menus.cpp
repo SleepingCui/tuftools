@@ -51,18 +51,68 @@ RankVal as_one_if_zero(RankVal value) { return value.is_zero() ? RankVal::from_n
 
 std::string float_of(const Json& value) { return value.key_text(); }
 
-Json search_level() {
+Json fetch_level_by_id(const std::string& id) {
+    Json response = fetchapi_sync(BASE_URL + "/v2/database/levels/byId/" + url_quote(id));
+    Json level = response.get("level");
+    if (level.is_null() && response.get("id").key_text() == id) level = response;
+    if (level.is_null()) throw std::runtime_error("API 返回内容中没有谱面详情");
+    return level;
+}
+
+Json search_level(bool allow_sort_selection = false) {
     constexpr long long kSearchLimit = 10;
+    std::string sort = "CLEARS_DESC";
+    std::string sort_label = "通关数降序";
+    if (allow_sort_selection) {
+        const std::vector<std::pair<std::string, std::string>> sort_options = {
+            {"CLEARS", "通关数"}, {"DOWNLOADS", "下载数"}, {"LIKES", "点赞数"},
+            {"FAVORITES", "收藏数"}, {"BPM", "BPM"}, {"TILECOUNT", "砖块数"},
+            {"DURATION", "时长"}, {"BASESCORE", "BaseScore"}, {"ID", "谱面 ID"}};
+        std::cout << "搜索排序（默认通关数降序）:" << std::endl;
+        for (size_t i = 0; i < sort_options.size(); ++i) {
+            std::cout << (i + 1) << ". " << sort_options[i].second << std::endl;
+        }
+        const std::string sort_choice = read_trimmed("排序字段（回车默认通关数）: ");
+        if (!sort_choice.empty()) {
+            const std::optional<long long> index = try_parse_int(sort_choice);
+            if (!index || *index < 1 || static_cast<size_t>(*index) > sort_options.size()) {
+                std::cout << "排序字段无效，使用通关数降序。" << std::endl;
+            } else {
+                sort = sort_options[static_cast<size_t>(*index - 1)].first;
+                sort_label = sort_options[static_cast<size_t>(*index - 1)].second;
+                const std::string order = lower_ascii(read_trimmed("排序方向（1 降序 / 2 升序，默认降序）: "));
+                if (order == "2") {
+                    sort += "_ASC";
+                    sort_label += "升序";
+                } else {
+                    sort += "_DESC";
+                    sort_label += "降序";
+                }
+            }
+        }
+    }
     while (true) {
         const std::string query = read_trimmed("输入谱面名或 ID（回车取消）: ");
         if (query.empty()) return Json();
+
+        const bool numeric_id = std::all_of(query.begin(), query.end(), [](unsigned char c) {
+            return std::isdigit(c) != 0;
+        });
+        if (numeric_id) {
+            try {
+                return fetch_level_by_id(query);
+            } catch (const std::exception& e) {
+                std::cout << "按谱面 ID 查询失败: " << e.what() << std::endl;
+                continue;
+            }
+        }
 
         long long offset = 0;
         while (true) {
             Json response;
             try {
                 const std::string url = BASE_URL + "/v2/database/levels?query=" + url_quote(query) +
-                                        "&sort=CLEARS_DESC&limit=" + std::to_string(kSearchLimit) +
+                                        "&sort=" + url_quote(sort) + "&limit=" + std::to_string(kSearchLimit) +
                                         "&offset=" + std::to_string(offset);
                 response = fetchapi_sync(url);
             } catch (const std::exception& e) {
@@ -77,7 +127,7 @@ Json search_level() {
                 break;
             }
 
-            std::cout << "搜索结果（按通关数排序；第 " << (offset / kSearchLimit + 1) << " 页）：" << std::endl;
+            std::cout << "搜索结果（按" << sort_label << "；第 " << (offset / kSearchLimit + 1) << " 页）：" << std::endl;
             for (size_t i = 0; i < levels.size(); ++i) {
                 const Json& level = levels[i];
                 const Json& difficulty = level.get("difficulty");
@@ -953,7 +1003,7 @@ void handle_pp_calc() {
 }
 
 void handle_level_lookup() {
-    const Json level = search_level();
+    const Json level = search_level(true);
     if (level.is_null()) return;
 
     print_level_details(level);
