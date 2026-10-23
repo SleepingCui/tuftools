@@ -1,7 +1,9 @@
 #include "menus.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -44,11 +46,150 @@ RankVal as_one_if_zero(RankVal value) { return value.is_zero() ? RankVal::from_n
 
 std::string float_of(const Json& value) { return value.key_text(); }
 
+Json search_level_for_pp() {
+    constexpr long long kSearchLimit = 10;
+    while (true) {
+        const std::string query = read_trimmed("输入谱面名或 ID（回车取消）: ");
+        if (query.empty()) return Json();
+
+        long long offset = 0;
+        while (true) {
+            Json response;
+            try {
+                const std::string url = BASE_URL + "/v2/database/levels?query=" + url_quote(query) +
+                                        "&sort=CLEARS_DESC&limit=" + std::to_string(kSearchLimit) +
+                                        "&offset=" + std::to_string(offset);
+                response = fetchapi_sync(url);
+            } catch (const std::exception& e) {
+                std::cout << "搜索谱面失败: " << e.what() << std::endl;
+                break;
+            }
+
+            const std::vector<Json> levels = response.get("results").elements();
+            if (levels.empty()) {
+                if (offset == 0) std::cout << "没有找到谱面，请尝试更短的关键词。" << std::endl;
+                else std::cout << "已经是最后一页。" << std::endl;
+                break;
+            }
+
+            std::cout << "搜索结果（按通关数排序；第 " << (offset / kSearchLimit + 1) << " 页）：" << std::endl;
+            for (size_t i = 0; i < levels.size(); ++i) {
+                const Json& level = levels[i];
+                const Json& difficulty = level.get("difficulty");
+                std::cout << "[" << (i + 1) << "] passes=" << level.get("clears").key_text()
+                          << " | ID=" << level.get("id").key_text() << " | "
+                          << level.get("song").as_string() << " - " << level.get("artist").as_string() << " | "
+                          << difficulty.get("name").as_string() << " | tiles=" << level.get("tilecount").key_text()
+                          << " | baseScore=" << level.get("baseScore").key_text()
+                          << " | diffBase=" << difficulty.get("baseScore").key_text()
+                          << " | ppBase=" << level.get("ppBaseScore").key_text() << std::endl;
+            }
+
+            const bool has_more = response.get("hasMore").truthy();
+            std::cout << "输入序号选择；n 下一页，p 上一页，0 重新搜索";
+            if (!has_more) std::cout << "（最后一页）";
+            const std::string choice = read_trimmed(": ");
+            if (choice == "0") break;
+            if (choice == "n" || choice == "N") {
+                if (has_more) offset += kSearchLimit;
+                else std::cout << "已经是最后一页。" << std::endl;
+                continue;
+            }
+            if (choice == "p" || choice == "P") {
+                if (offset >= kSearchLimit) offset -= kSearchLimit;
+                else std::cout << "已经是第一页。" << std::endl;
+                continue;
+            }
+            const std::optional<long long> index = try_parse_int(choice);
+            if (!index.has_value() || *index < 1 || static_cast<size_t>(*index) > levels.size()) {
+                std::cout << "输入无效。" << std::endl;
+                continue;
+            }
+            return levels[static_cast<size_t>(*index - 1)];
+        }
+    }
+}
+
+constexpr size_t kRankedScoreLimit = 20;
+constexpr double kRankedScoreWeight = 0.9;
+
+std::optional<double> ranked_score_after_candidate(const Json& player, double candidate_score,
+                                                   const std::string& candidate_level_id, double& added_score,
+                                                   std::string& error) {
+    const PassList passes = fetch_all_player_passes(player.get("name").as_string(), player.get("id"));
+    const double current_ranked_score = player.get("rankedScore").number_or(0.0);
+    if (passes.rows.empty() && player.get("totalPasses").number_or(0.0) > 0.0) {
+        error = "没有获取到玩家通关记录";
+        return std::nullopt;
+    }
+
+    // Ranked score keeps the best pass for each level before applying the top-20
+    // 0.9 decay. Repeated clears therefore cannot occupy multiple slots.
+    std::map<std::string, double> best_by_level;
+    for (const Json& pass : passes.rows) {
+        if (pass.get("isHidden").truthy() || pass.get("isDuplicate").truthy()) continue;
+        const Json score = pass.get("scoreV2");
+        if (!score.is_number()) continue;
+
+        Json level_id = pass.get("levelId");
+        if (level_id.is_null()) level_id = pass.get("level").get("id");
+        if (level_id.is_null()) level_id = pass.get("id");
+        if (level_id.is_null()) continue;
+
+        const std::string key = level_id.key_text();
+        const double value = score.as_double();
+        auto it = best_by_level.find(key);
+        if (it == best_by_level.end() || value > it->second) best_by_level[key] = value;
+    }
+
+    std::vector<double> scores;
+    scores.reserve(best_by_level.size() + 1);
+    for (const auto& entry : best_by_level) scores.push_back(entry.second);
+
+    if (!candidate_level_id.empty()) {
+        auto it = best_by_level.find(candidate_level_id);
+        if (it != best_by_level.end()) {
+            if (candidate_score > it->second) {
+                scores.erase(std::find(scores.begin(), scores.end(), it->second));
+                scores.push_back(candidate_score);
+            }
+        } else {
+            scores.push_back(candidate_score);
+        }
+    } else {
+        scores.push_back(candidate_score);
+    }
+
+    std::sort(scores.begin(), scores.end(), std::greater<double>());
+    auto weighted_top_20 = [](const std::vector<double>& values) {
+        double total = 0.0;
+        const size_t count = std::min(values.size(), kRankedScoreLimit);
+        for (size_t i = 0; i < count; ++i) {
+            total += values[i] * std::pow(kRankedScoreWeight, static_cast<double>(i));
+        }
+        return total;
+    };
+
+    std::vector<double> old_scores;
+    old_scores.reserve(best_by_level.size());
+    for (const auto& entry : best_by_level) old_scores.push_back(entry.second);
+    std::sort(old_scores.begin(), old_scores.end(), std::greater<double>());
+    const double old_weighted_score = weighted_top_20(old_scores);
+    if (std::abs(current_ranked_score - old_weighted_score) > 0.05) {
+        error = "通关记录重算值与玩家当前 rankedScore 不一致";
+        return std::nullopt;
+    }
+
+    const double new_weighted_score = weighted_top_20(scores);
+    added_score = new_weighted_score - old_weighted_score;
+    return current_ranked_score + added_score;
+}
+
 }  // namespace
 
 // ============================================================== ppcalc.py ====
 
-void calculate_rank_changes(double calculated_score) {
+void calculate_rank_changes(double calculated_score, const std::string& selected_level_id) {
     std::cout << "选择查找玩家的方式:" << std::endl;
     std::cout << "1. 按玩家名称" << std::endl;
     std::cout << "2. 按玩家唯一 ID" << std::endl;
@@ -76,6 +217,15 @@ void calculate_rank_changes(double calculated_score) {
         return;
     }
 
+    std::string candidate_level_id = selected_level_id;
+    if (candidate_level_id.empty() && lower_ascii(read_trimmed("本次成绩是否对应已有谱面？(y/N): ")) == "y") {
+        candidate_level_id = read_trimmed("关卡 ID: ");
+        if (candidate_level_id.empty()) {
+            std::cout << "已有谱面需要填写关卡 ID，已取消排名估算。" << std::endl;
+            return;
+        }
+    }
+
     if (player.is_object() && !player.items().empty() &&
         (!player.has("rankedScoreRank") || !player.has("rankedScore"))) {
         try {
@@ -87,7 +237,15 @@ void calculate_rank_changes(double calculated_score) {
     }
 
     const double old_score = player.get("rankedScore").number_or(0.0);
-    const double new_score = old_score + calculated_score;
+    double added_score = 0.0;
+    std::string score_error;
+    const std::optional<double> new_score_value =
+        ranked_score_after_candidate(player, calculated_score, candidate_level_id, added_score, score_error);
+    if (!new_score_value.has_value()) {
+        std::cout << "无法计算加权排位分: " << score_error << std::endl;
+        return;
+    }
+    const double new_score = *new_score_value;
 
     const Json old_global_json = player.get("rankedScoreRank");
 
@@ -127,8 +285,9 @@ void calculate_rank_changes(double calculated_score) {
 
     std::cout << "玩家: " << player.get("name").as_string() << " (ID: " << player.get("id").key_text() << ")"
               << std::endl;
-    std::cout << "排位分数: " << format_fixed(old_score, 2) << " -> " << format_fixed(new_score, 2) << " (+"
-              << format_fixed(calculated_score, 2) << ")" << std::endl;
+    std::cout << "加权排位分: " << format_fixed(old_score, 2) << " -> " << format_fixed(new_score, 2) << " ("
+              << (added_score >= 0.0 ? "+" : "") << format_fixed(added_score, 2)
+              << std::endl;
     std::cout << "全球排名: " << old_global_rank.str() << " -> " << new_global_rank.str() << " (" << global_delta << ")"
               << std::endl;
     std::cout << "国家排名: " << old_country_rank.str() << " -> " << new_country_rank.str() << " (" << country_delta
@@ -139,45 +298,49 @@ void handle_pp_calc() {
     TUFScoreCalculator calculator;
     DifficultyManager diffman;
 
-    if (DifficultyManager::file_exists()) {
-        const std::string update = lower_ascii(read_trimmed("是否更新难度数据库? (y/N): "));
-        if (update == "y") {
-            try {
-                diffman.update();
-                calculator.diffman().load();
-                std::cout << "难度数据库更新完成。" << std::endl;
-            } catch (const std::exception& e) {
-                std::cout << "更新失败: " << e.what() << std::endl;
-            }
-        }
-    } else {
-        std::cout << "下载难度数据库..." << std::endl;
-        try {
-            diffman.update();
-            calculator.diffman().load();
-            std::cout << "下载完成" << std::endl;
-        } catch (const std::exception& e) {
-            std::cout << "下载失败: " << e.what() << std::endl;
-            return;
-        }
-    }
-
     std::cout << "选择BaseScore来源:" << std::endl;
     std::cout << "1. 按难度等级" << std::endl;
-    std::cout << "2. 直接输入BaseScore" << std::endl;
+    std::cout << "2. 按谱面搜索" << std::endl;
+    std::cout << "3. 直接输入BaseScore" << std::endl;
     const std::string base_mode = read_trimmed("> ");
 
     std::string difficulty;
     std::optional<double> base_score;
-    if (base_mode == "2") {
+    Json selected_level;
+    if (base_mode == "1") {
+        if (DifficultyManager::file_exists()) {
+            const std::string update = lower_ascii(read_trimmed("是否更新难度数据库? (y/N): "));
+            if (update == "y") {
+                try {
+                    diffman.update();
+                    calculator.diffman().load();
+                    std::cout << "难度数据库更新完成。" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cout << "更新失败: " << e.what() << std::endl;
+                }
+            }
+        } else {
+            std::cout << "下载难度数据库..." << std::endl;
+            try {
+                diffman.update();
+                calculator.diffman().load();
+                std::cout << "下载完成" << std::endl;
+            } catch (const std::exception& e) {
+                std::cout << "下载失败: " << e.what() << std::endl;
+                return;
+            }
+        }
+        difficulty = upper_ascii(read_trimmed("难度: "));
+    } else if (base_mode == "2") {
+        selected_level = search_level_for_pp();
+        if (selected_level.is_null()) return;
+    } else if (base_mode == "3") {
         const std::optional<double> parsed = try_parse_double(read_trimmed("BaseScore: "));
         if (!parsed.has_value()) {
             std::cout << "could not convert string to float" << std::endl;
             return;
         }
         base_score = parsed;
-    } else if (base_mode == "1") {
-        difficulty = upper_ascii(read_trimmed("难度: "));
     } else {
         std::cout << "无效选择" << std::endl;
         return;
@@ -185,24 +348,41 @@ void handle_pp_calc() {
 
     const bool marathon = lower_ascii(read_trimmed("是否Marathon(y/N): ")) == "y";
 
-    const std::string tilecount_input = read_trimmed("关卡砖块数: ");
-    const std::optional<long long> tilecount_parsed = try_parse_int(tilecount_input);
-    if (!tilecount_parsed.has_value()) {
-        std::cout << "砖块数必须是整数" << std::endl;
-        return;
-    }
-    const long long tilecount = *tilecount_parsed;
-    if (tilecount <= 0) {
-        std::cout << "砖块数必须大于 0" << std::endl;
-        return;
-    }
-
     Json level_data;
-    try {
-        level_data = calculator.build_level_data(difficulty, marathon, tilecount, base_score);
-    } catch (const std::exception& e) {
-        std::cout << e.what() << std::endl;
-        return;
+    if (base_mode == "2") {
+        if (marathon) {
+            Json api_difficulty = selected_level.get("difficulty");
+            api_difficulty.set("name", "Marathon");
+            selected_level.set("difficulty", api_difficulty);
+        }
+        const Json api_tilecount = selected_level.get("tilecount");
+        if (!api_tilecount.is_number() || api_tilecount.as_int() <= 0) {
+            std::cout << "API 未返回有效砖块数。" << std::endl;
+            return;
+        }
+        level_data = Json::object();
+        level_data.set("level", selected_level);
+        std::cout << "已选择谱面 ID=" << selected_level.get("id").key_text() << " | "
+                  << selected_level.get("song").as_string() << " - " << selected_level.get("artist").as_string()
+                  << " | tiles=" << api_tilecount.key_text() << std::endl;
+    } else {
+        const std::string tilecount_input = read_trimmed("关卡砖块数: ");
+        const std::optional<long long> tilecount_parsed = try_parse_int(tilecount_input);
+        if (!tilecount_parsed.has_value()) {
+            std::cout << "砖块数必须是整数" << std::endl;
+            return;
+        }
+        const long long tilecount = *tilecount_parsed;
+        if (tilecount <= 0) {
+            std::cout << "砖块数必须大于 0" << std::endl;
+            return;
+        }
+        try {
+            level_data = calculator.build_level_data(difficulty, marathon, tilecount, base_score);
+        } catch (const std::exception& e) {
+            std::cout << e.what() << std::endl;
+            return;
+        }
     }
 
     const std::optional<double> accuracy_parsed = try_parse_double(read_trimmed("XACC: "));
@@ -257,7 +437,8 @@ void handle_pp_calc() {
 
     const std::string calc_rank = lower_ascii(read_trimmed("\n是否计算排名变化? (y/N): "));
     if (calc_rank == "y") {
-        calculate_rank_changes(result.get("score").as_double());
+        const std::string selected_level_id = base_mode == "2" ? selected_level.get("id").key_text() : "";
+        calculate_rank_changes(result.get("score").as_double(), selected_level_id);
     }
 
     std::cout << std::endl;

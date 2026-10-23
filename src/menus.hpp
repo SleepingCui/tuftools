@@ -1,10 +1,12 @@
 // Ports of ppcalc.py and acccalc.py (the interactive menu handlers).
 #pragma once
 
+#include <string>
+
 namespace tuf {
 
-// ppcalc.calculate_rank_changes(calculated_score)
-void calculate_rank_changes(double calculated_score);
+// ppcalc.calculate_rank_changes(calculated_score, selected_level_id)
+void calculate_rank_changes(double calculated_score, const std::string& selected_level_id = "");
 
 // ppcalc.handle_pp_calc()
 void handle_pp_calc();
