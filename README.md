@@ -9,6 +9,11 @@
 - 计算XACC
 - 根据XACC推算最优判定
 
+## Docs
+
+- [项目完整文档](docs/doc.md)
+- [XACC 反推算法详解](docs/xacc_reverse.md)
+
 ## 构建
 
 ### Windows（PowerShell）
