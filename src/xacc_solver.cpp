@@ -201,7 +201,7 @@ bool Search::prepare(std::string& error) {
     if (!xacc_target_window(target_, model_, total_, window_low_, window_high_, error)) return false;
     if (!xacc_target_units(target_, model_, total_, target_units_, error)) return false;
 
-    long long fixed_notes = 0;
+    std::int64_t fixed_notes = 0;
     for (std::size_t index = 0; index < keys_.size(); ++index) {
         const std::string& key = keys_[index];
         auto it = fixed_in_.find(key);
@@ -1217,7 +1217,7 @@ XaccEquivalentSet xacc_equivalents(const XaccModel& model, const XaccTarget& tar
     }
     if (max_solutions <= 0) max_solutions = 1;
 
-    long long fixed_notes = 0;
+    std::int64_t fixed_notes = 0;
     XaccScoreUnit fixed_score = 0;
     XaccCostUnit fixed_cost = 0;
     for (const std::pair<const std::string, long long>& entry : fixed_counts) {
@@ -1294,7 +1294,7 @@ XaccEquivalentSet xacc_equivalents(const XaccModel& model, const XaccTarget& tar
         out.message = "所有判定权重相同，不存在等效组合";
         return out;
     }
-    long long max_ur = 0;
+    std::int64_t max_ur = 0;
     for (Item& item : items) {
         item.ur = static_cast<std::int64_t>(item.u) / divisor;
         max_ur = std::max(max_ur, item.ur);
