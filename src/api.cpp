@@ -35,6 +35,7 @@ const char* const kCacheFile = "cache.json";
 
 std::string g_proxy;
 bool g_verbose = false;
+bool g_verbose_json = false;
 std::atomic<int> g_count{0};
 std::atomic<long long> g_api_us{0};
 Clock::time_point g_span_start{};
@@ -196,7 +197,7 @@ Json get_once(const std::string& url) {
         if (g_verbose) {
             std::string line = "    <- #" + std::to_string(index) + " HTTP " + std::to_string(e.status()) +
                                " 请求失败 " + e.what() + "  " + format_fixed(elapsed_ms(t0, t1), 2) + " ms";
-            const std::string block = format_body_block(e.body());
+            const std::string block = g_verbose_json ? format_body_block(e.body()) : std::string();
             if (!block.empty()) line += "\n" + block;
             print_locked(line);
         }
@@ -217,7 +218,7 @@ Json get_once(const std::string& url) {
         std::string line = "    <- #" + std::to_string(index) + " " + std::to_string(response.status) + " " +
                            response.reason + "  " + format_fixed(elapsed_ms(t0, t1), 2) + " ms  " +
                            std::to_string(response.body.size()) + " B";
-        const std::string block = format_body_block(response.body);
+        const std::string block = g_verbose_json ? format_body_block(response.body) : std::string();
         if (!block.empty()) line += "\n" + block;
         print_locked(line);
     }
@@ -241,6 +242,8 @@ void set_proxies(const std::string& proxy_url) {
 void set_verbose(bool enabled) { g_verbose = enabled; }
 
 bool verbose_enabled() { return g_verbose; }
+
+void set_verbose_json(bool enabled) { g_verbose_json = enabled; }
 
 std::string active_proxy() { return g_proxy; }
 

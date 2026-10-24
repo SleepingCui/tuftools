@@ -311,7 +311,7 @@ void run_player(const Json& player_in) {
     }
     details(player, ranks, &head);
 
-    if (!passes.rows.empty()) {
+    if (static_cast<long long>(passes.rows.size()) > PASS_DISPLAY_LIMIT) {
         std::cout << std::endl;
         const std::string more = lower_ascii(read_trimmed("查看全部通关记录? (y/N): "));
         if (more == "y") {

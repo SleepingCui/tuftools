@@ -59,7 +59,7 @@ std::int64_t ceil_div_i64(std::int64_t a, std::int64_t b);
 // a / b rounded to nearest, for b > 0.
 std::int64_t round_div_i64(std::int64_t a, std::int64_t b);
 
-// Reverse-search budgets (tgb.md 5E).  They live in xacc.json next to the
+// Reverse-search budgets (tgb.md 5E).  They live in settings.json next to the
 // difficulty coefficients so the menu can edit them the same way, and are shared
 // with XaccReverseOptions so the defaults cannot drift apart.
 constexpr long long kDefaultMaxNodes = 20000000;
@@ -75,7 +75,7 @@ struct XaccModel {
     long long max_dp_cells = kDefaultMaxDpCells;
     long long max_nodes = kDefaultMaxNodes;
     double max_seconds = kDefaultMaxSeconds;
-    std::vector<std::string> order;  // every key, in costs.json / menu order
+    std::vector<std::string> order;  // every key, in the judgement menu order
     std::map<std::string, XaccScoreUnit> weight_units;
     std::map<std::string, XaccCostUnit> cost_units;
 
@@ -84,8 +84,8 @@ struct XaccModel {
     XaccCostUnit cost(const std::string& key) const;
 };
 
-// Configuration file (schemaVersion 2), holding both tables as integers.  When
-// only the legacy costs.json / weights.json exist they are migrated -- but only
+// The "xacc" section of settings.json (schemaVersion 2), holding both tables as
+// integers. Legacy costs.json / weights.json are migrated -- but only
 // if every value lands exactly on the configured precision; anything ambiguous
 // is reported by key instead of being silently rounded.  Returns false and
 // fills `error` when the configuration cannot be used.

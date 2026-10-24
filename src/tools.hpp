@@ -66,7 +66,7 @@ private:
 // XPerfect splits the single `perfect` judgement into +perfect / -perfect / xperfect.
 // All three carry perfect's weight (1.0), so the XACC value of a run is unchanged;
 // only the reverse search treats them as distinct judgements, and it prices them
-// separately through xacc.json (defaults: xperfect 0, +perfect 10, -perfect 10).
+// separately through settings.json (defaults: xperfect 0, +perfect 10, -perfect 10).
 //
 // The judgement weights are a FIXED GAME RULE, not configuration: XACC is defined
 // by them, so they are compiled in (weights.cpp) and never read from or written to

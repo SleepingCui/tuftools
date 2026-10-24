@@ -17,6 +17,7 @@ int run(int argc, char** argv) {
     program.add_description("TUF Tools");
     program.add_argument("--proxy").help("http proxy URL");
     program.add_argument("--verbose", "-v").help("Verbose output").default_value(false).implicit_value(true);
+    program.add_argument("--dump-json").help("Print response JSON bodies (requires -v)").default_value(false).implicit_value(true);
     program.add_argument("--no-cache").help("Do not read or write the response cache")
         .default_value(false)
         .implicit_value(true);
@@ -34,12 +35,14 @@ int run(int argc, char** argv) {
         proxy = *value;
     }
     const bool verbose = program.get<bool>("--verbose");
+    const bool dump_json = program.get<bool>("--dump-json");
     const bool no_cache = program.get<bool>("--no-cache");
 
     if (!proxy.empty()) {
         tuf::set_proxies(proxy);
     }
     tuf::set_verbose(verbose);
+    tuf::set_verbose_json(verbose && dump_json);
     tuf::set_cache_enabled(!no_cache);
 
     std::cout << "=== TUF Tools ===" << std::endl;

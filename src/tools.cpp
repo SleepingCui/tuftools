@@ -22,8 +22,69 @@
 namespace tuf {
 
 namespace {
-constexpr const char* COSTS_FILE = "costs.json";
-constexpr const char* DIFFICULTIES_FILE = "difficulties.json";
+constexpr const char* DIFFICULTIES_SECTION = "difficulties";
+
+struct XaccCurveConfig {
+    double cutoff = 0.95;
+    double top_multiplier = 5.51289781;
+    double pole_offset = 0.0054017154;
+};
+
+double curve_value(const Json& curve, const std::string& key, double fallback) {
+    const Json value = curve.get(key);
+    return value.is_number() ? value.as_double() : fallback;
+}
+
+XaccCurveConfig xacc_curve_config(const Json* curve) {
+    XaccCurveConfig config;
+    if (curve == nullptr) return config;
+
+    Json parsed_curve;
+    const Json* source = curve;
+    if (curve->is_string()) {
+        try {
+            parsed_curve = Json::parse(curve->as_string());
+            source = &parsed_curve;
+        } catch (const std::exception&) {
+            return config;
+        }
+    }
+    if (!source->is_object()) return config;
+
+    Json meta = source->get("xaccCurveMeta");
+    const Json& values = meta.is_object() ? meta : *source;
+    config.cutoff = curve_value(values, "cutoff", config.cutoff);
+    config.top_multiplier = curve_value(values, "topMultiplier", config.top_multiplier);
+    config.pole_offset = curve_value(values, "poleOffset", config.pole_offset);
+
+    if (!std::isfinite(config.cutoff) || config.cutoff < 0.0 || config.cutoff >= 1.0 ||
+        !std::isfinite(config.top_multiplier) || config.top_multiplier <= 1.0 ||
+        !std::isfinite(config.pole_offset) || config.pole_offset <= 0.0 || config.pole_offset >= 1.0) {
+        return XaccCurveConfig{};
+    }
+    return config;
+}
+
+bool xacc_curve_is_custom(const Json* curve) {
+    if (curve == nullptr) return false;
+
+    Json parsed_curve;
+    const Json* source = curve;
+    if (curve->is_string()) {
+        try {
+            parsed_curve = Json::parse(curve->as_string());
+            source = &parsed_curve;
+        } catch (const std::exception&) {
+            return false;
+        }
+    }
+    if (!source->is_object()) return false;
+
+    const Json meta = source->get("xaccCurveMeta");
+    const Json& values = meta.is_object() ? meta : *source;
+    return values.get("cutoff").is_number() || values.get("topMultiplier").is_number() ||
+           values.get("poleOffset").is_number();
+}
 }  // namespace
 
 // ============================================================== CostsMan ====
@@ -46,15 +107,10 @@ const std::map<std::string, double>& default_jd_costs() {
 
 std::map<std::string, double> costs_load() {
     const std::map<std::string, double>& defaults = default_jd_costs();
-    std::ifstream file(data_file(COSTS_FILE), std::ios::binary);
-    if (!file.good()) {
-        costs_save(defaults);
-        return defaults;
-    }
     try {
-        std::ostringstream buffer;
-        buffer << file.rdbuf();
-        const Json parsed = Json::parse(buffer.str());
+        Json parsed;
+        std::string error;
+        if (!settings_read("legacyCosts", parsed, error) || !parsed.is_object()) return defaults;
         std::map<std::string, double> costs;
         for (const std::string& key : jd_cost_keys()) {
             costs[key] = parsed.get(key).is_number() ? parsed.get(key).as_double() : defaults.at(key);
@@ -73,8 +129,8 @@ void costs_save(const std::map<std::string, double>& costs) {
             auto it = costs.find(key);
             root.set(key, it == costs.end() ? default_jd_costs().at(key) : it->second);
         }
-        std::ofstream file(data_file(COSTS_FILE), std::ios::binary | std::ios::trunc);
-        file << root.dump(4);
+        std::string error;
+        if (!settings_write("legacyCosts", root, error)) std::cout << "保存配置文件失败: " << error << std::endl;
     } catch (const std::exception& e) {
         std::cout << "保存配置文件失败: " << e.what() << std::endl;
     }
@@ -85,8 +141,9 @@ void costs_save(const std::map<std::string, double>& costs) {
 DifficultyManager::DifficultyManager() { load(); }
 
 bool DifficultyManager::file_exists() {
-    std::ifstream file(data_file(DIFFICULTIES_FILE), std::ios::binary);
-    return file.good();
+    Json stored;
+    std::string error;
+    return settings_read(DIFFICULTIES_SECTION, stored, error) && stored.is_array();
 }
 
 std::vector<Json> DifficultyManager::load() {
@@ -94,10 +151,9 @@ std::vector<Json> DifficultyManager::load() {
         std::cout << "下载难度数据..." << std::endl;
         return update();
     }
-    std::ifstream file(data_file(DIFFICULTIES_FILE), std::ios::binary);
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    const Json parsed = Json::parse(buffer.str());
+    Json parsed;
+    std::string error;
+    if (!settings_read(DIFFICULTIES_SECTION, parsed, error)) throw std::runtime_error(error);
     difficulties_.clear();
     if (parsed.is_array()) {
         for (const Json& item : parsed.elements()) difficulties_.push_back(item);
@@ -118,8 +174,8 @@ std::vector<Json> DifficultyManager::update() {
         }
     }
 
-    std::ofstream file(data_file(DIFFICULTIES_FILE), std::ios::binary | std::ios::trunc);
-    file << Json::array(result).dump(2);
+    std::string error;
+    if (!settings_write(DIFFICULTIES_SECTION, Json::array(result), error)) throw std::runtime_error(error);
 
     difficulties_ = result;
     downloaded_ = true;
@@ -190,7 +246,7 @@ std::pair<double, std::string> TUFScoreCalculator::get_base_score(const Json& le
     const Json& level = level_data.has("level") ? level_data.get("level") : level_data;
     const Json& difficulty = level.get("difficulty");
 
-    if (accuracy >= 0.9999) {
+    if (accuracy == 1.0) {
         const double pp_base = level.get("ppBaseScore").number_or(0.0);
         if (pp_base != 0.0) return {pp_base, "ppBaseScore"};
     }
@@ -203,10 +259,20 @@ std::pair<double, std::string> TUFScoreCalculator::get_base_score(const Json& le
     return {1000.0, "default"};
 }
 
-double TUFScoreCalculator::calculate_score_multiplier(double accuracy, double base_score, const Json*) const {
-    if (accuracy < 0.95 || accuracy > 1.0) return 1.0;
+double TUFScoreCalculator::calculate_score_multiplier(double accuracy, double base_score, const Json* xacc_curve) const {
+    const XaccCurveConfig config = xacc_curve_config(xacc_curve);
+    if (accuracy < config.cutoff || accuracy > 1.0) return 1.0;
     if (accuracy == 1.0) return base_score != 0.0 ? -2100.0 / (base_score + 262.5) + 14.0 : 1.0;
-    return -0.027 / (accuracy - 1.0054) + 0.513;
+
+    const double span = 1.0 - config.cutoff;
+    const double hyperbola_a =
+        (config.top_multiplier - 1.0) * config.pole_offset * (span + config.pole_offset) / span;
+    const double hyperbola_b = 1.0 - hyperbola_a / (span + config.pole_offset);
+    const double t = std::clamp((accuracy - config.cutoff) / span, 0.0, 1.0);
+    const double unit_shape =
+        (hyperbola_b - hyperbola_a / (span * (t - 1.0) - config.pole_offset) - 1.0) /
+        (config.top_multiplier - 1.0);
+    return 1.0 + (config.top_multiplier - 1.0) * unit_shape;
 }
 
 double TUFScoreCalculator::calculate_speed_modifier(double speed, bool is_marathon) const {
@@ -248,24 +314,48 @@ Json TUFScoreCalculator::calculate_score(const Json& level_data, double accuracy
     const std::pair<double, std::string> base = get_base_score(level_data, accuracy);
     const double base_score = base.first;
     const std::string base_source = base.second;
-    const double multiplier = calculate_score_multiplier(accuracy, base_score);
+    Json curve = level.get("xaccCurve");
+    if (!curve.is_object()) {
+        curve = level.get("xaccCurveMeta");
+        if (curve.is_string()) {
+            try {
+                curve = Json::parse(curve.as_string());
+            } catch (const std::exception&) {
+                curve = Json();
+            }
+        }
+        if (curve.is_object()) {
+            if (!curve.has("topMultiplier")) curve.set("topMultiplier", level.get("xaccTopMultiplier"));
+            if (!curve.has("poleOffset")) curve.set("poleOffset", level.get("xaccPoleOffset"));
+        } else {
+            curve = Json::object();
+            curve.set("topMultiplier", level.get("xaccTopMultiplier"));
+            curve.set("poleOffset", level.get("xaccPoleOffset"));
+        }
+    }
+    const XaccCurveConfig curve_config = xacc_curve_config(&curve);
+    const bool custom_xacc_curve = xacc_curve_is_custom(&curve);
+    const double multiplier = calculate_score_multiplier(accuracy, base_score, &curve);
 
     const bool is_marathon = difficulty.get("name").as_string() == "Marathon";
     const double speed_mod = calculate_speed_modifier(speed, is_marathon);
 
     const long long tilecount = level.get("tilecount").is_number() ? level.get("tilecount").as_int() : 0;
     const double empty_tap_mod = calculate_empty_tap_modifier(misses, tilecount);
-    const double default_setting_mod = is_no_hold_tap ? 0.9 : 1.0;
+    const double default_setting_mod = is_no_hold_tap ? 0.95 : 1.0;
     const double raw_score = base_score * multiplier * speed_mod * empty_tap_mod * default_setting_mod;
-    const double final_score = std::max(raw_score, base_score);
 
     Json result = Json::object();
     result.set("accuracy", accuracy);
-    result.set("accuracy_pct", py_round(accuracy_pct, 2));
-    result.set("score", final_score);
+    result.set("accuracy_pct", py_round(accuracy_pct, 4));
+    result.set("score", raw_score);
     result.set("raw_score", raw_score);
     result.set("base_score", base_score);
     result.set("base_source", base_source);
+    result.set("xacc_curve_custom", custom_xacc_curve);
+    result.set("xacc_curve_cutoff", curve_config.cutoff);
+    result.set("xacc_curve_top_multiplier", curve_config.top_multiplier);
+    result.set("xacc_curve_pole_offset", curve_config.pole_offset);
     result.set("multiplier", py_round(multiplier, 4));
     result.set("speed_mod", py_round(speed_mod, 4));
     result.set("empty_tap_mod", py_round(empty_tap_mod, 4));

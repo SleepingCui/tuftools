@@ -1,11 +1,8 @@
 #include "xacc_model.hpp"
 
 #include <cmath>
-#include <cstdio>
-#include <fstream>
 #include <iostream>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
 
 #include "apppaths.hpp"
@@ -18,10 +15,9 @@ namespace tuf {
 
 namespace {
 
-constexpr const char* XACC_FILE = "xacc.json";
-constexpr const char* LEGACY_WEIGHTS_FILE = "weights.json";
+constexpr const char* XACC_SECTION = "xacc";
+constexpr const char* XACC_FILE = "settings.json (xacc)";
 constexpr const char* LEGACY_COSTS_FILE = "costs.json";
-constexpr const char* BACKUP_SUFFIX = ".v1.bak";
 constexpr int kSchemaVersion = 2;
 constexpr XaccScoreUnit kDefaultScoreScale = 1000;
 constexpr XaccCostUnit kDefaultCostScale = 1000;
@@ -29,20 +25,6 @@ constexpr XaccCostUnit kDefaultCostScale = 1000;
 // of silently rounded (tgb.md 4.1).
 constexpr double kExactEpsilon = 1e-6;
 constexpr int kMaxTargetDecimals = 6;
-
-bool file_exists(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    return file.good();
-}
-
-bool read_text_file(const std::string& path, std::string& out) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.good()) return false;
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    out = buffer.str();
-    return true;
-}
 
 std::int64_t pow10_i64(int exponent) {
     std::int64_t value = 1;
@@ -312,13 +294,7 @@ bool xacc_model_save(const XaccModel& model, std::string& error) {
         }
         root.set("weights", weights);
         root.set("costs", costs);
-        std::ofstream file(data_file(XACC_FILE), std::ios::binary | std::ios::trunc);
-        if (!file.good()) {
-            error = std::string("无法写入 ") + XACC_FILE;
-            return false;
-        }
-        file << root.dump(4);
-        return true;
+        return settings_write(XACC_SECTION, root, error);
     } catch (const std::exception& e) {
         error = std::string("保存 ") + XACC_FILE + " 失败: " + e.what();
         return false;
@@ -338,7 +314,7 @@ bool parse_v2(const Json& root, XaccModel& model, std::string& error, std::strin
     const Json version = root.get("schemaVersion");
     if (!version.is_number() || version.as_int() != kSchemaVersion) {
         error = std::string(XACC_FILE) + " 的 schemaVersion 不是 " + std::to_string(kSchemaVersion) +
-                "，请删除该文件让程序从 costs.json / weights.json 重新迁移";
+                "，请检查 settings.json 中的 xacc 配置";
         return false;
     }
     const Json score_scale = root.get("scoreScale");
@@ -460,23 +436,19 @@ bool parse_v2(const Json& root, XaccModel& model, std::string& error, std::strin
     return true;
 }
 
-// Converts the legacy costs.json (doubles) into the integer model, refusing any
+// Converts legacy judgement costs (doubles) into the integer model, refusing any
 // cost that does not land exactly on the unit grid.  Judgement weights are never
-// taken from a file; a legacy weights.json is only retired.
+// taken from a file.
 bool migrate_legacy(XaccModel& model, std::string& error, std::string* note) {
     model.score_scale = kDefaultScoreScale;
     model.cost_scale = kDefaultCostScale;
 
     const std::map<std::string, double> legacy_costs = costs_load();
 
-    const bool had_weights = file_exists(data_file(LEGACY_WEIGHTS_FILE));
-    const bool had_costs = file_exists(data_file(LEGACY_COSTS_FILE));
-
     for (const std::string& key : jd_cost_keys()) {
         std::int64_t units = 0;
         bool exact = false;
-        // Weights come from the compiled-in table only; a legacy weights.json is
-        // retired below rather than honoured.
+        // Weights come from the compiled-in table only; legacy weights are ignored.
         const double weight = fixed_jd_weights().at(key);
         if (!units_from_value(weight, model.score_scale, units, exact) || !exact) {
             error = "权重无法转换: " + key + " = " + py_float_str(weight);
@@ -501,32 +473,7 @@ bool migrate_legacy(XaccModel& model, std::string& error, std::string* note) {
 
     std::string save_error;
     const bool saved = xacc_model_save(model, save_error);
-    if (note != nullptr) {
-        if (saved) {
-            *note = std::string("已生成 ") + XACC_FILE;
-        } else {
-            *note = save_error + "，使用内存中的配置";
-        }
-    }
-
-    // Retire the legacy files so a later hand edit cannot silently do nothing.
-    if (had_weights || had_costs) {
-        const char* names[2] = {LEGACY_WEIGHTS_FILE, LEGACY_COSTS_FILE};
-        const bool present[2] = {had_weights, had_costs};
-        for (int i = 0; i < 2; ++i) {
-            if (!present[i]) continue;
-            const std::string path = data_file(names[i]);
-            const std::string backup = path + BACKUP_SUFFIX;
-            std::remove(backup.c_str());
-            if (std::rename(path.c_str(), backup.c_str()) != 0 && note != nullptr) {
-                *note += std::string("；未能备份 ") + names[i];
-            }
-        }
-    }
-    if (had_weights && note != nullptr) {
-        *note += std::string("；") + LEGACY_WEIGHTS_FILE +
-                 " 已停用";
-    }
+    if (note != nullptr) *note = saved ? "已写入 settings.json" : save_error + "，使用内存中的配置";
     return true;
 }
 
@@ -534,16 +481,9 @@ bool migrate_legacy(XaccModel& model, std::string& error, std::string* note) {
 
 bool xacc_model_load(XaccModel& model, std::string& error, std::string* note) {
     model = XaccModel();
-    std::string text;
-    if (read_text_file(data_file(XACC_FILE), text)) {
-        try {
-            const Json root = Json::parse(text);
-            return parse_v2(root, model, error, note);
-        } catch (const std::exception& e) {
-            error = std::string(XACC_FILE) + " 无法解析: " + e.what();
-            return false;
-        }
-    }
+    Json root;
+    if (!settings_read(XACC_SECTION, root, error)) return false;
+    if (!root.is_null()) return parse_v2(root, model, error, note);
     return migrate_legacy(model, error, note);
 }
 

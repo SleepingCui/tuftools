@@ -13,6 +13,7 @@ extern const std::string BASE_URL;  // "https://api.tuforums.com"
 void set_proxies(const std::string& proxy_url);
 void set_verbose(bool enabled);
 bool verbose_enabled();
+void set_verbose_json(bool enabled);
 std::string active_proxy();
 
 // Response cache.  Every GET goes through here, so a second lookup of the same

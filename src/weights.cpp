@@ -6,10 +6,10 @@
 // They are a fixed rule, not a setting.  Changing one would silently change what
 // every XACC percentage in this tool means, and a chart's XACC would stop matching
 // the game.  So they are compiled in here: there is no weights.json any more and
-// nothing reads them from xacc.json either.
+// nothing reads them from settings.json either.
 //
 // What the user IS meant to tune is the difficulty coefficient (cost) of each
-// judgement -- see jd_cost_keys() / default_jd_costs() in tools.cpp and xacc.json.
+// judgement -- see jd_cost_keys() / default_jd_costs() in tools.cpp and settings.json.
 // Costs never enter a forward XACC calculation; they only tell the reverse search
 // which of several equally-accurate judgement splits to prefer.
 //

@@ -217,12 +217,11 @@ std::vector<std::string> json_strings(const std::vector<Json>& values) {
 }
 
 bool load_transform_presets(std::vector<TransformPreset>& presets) {
-    std::ifstream input(data_file("transform_presets.json"), std::ios::binary);
-    if (!input.good()) return true;
     try {
-        std::ostringstream buffer;
-        buffer << input.rdbuf();
-        const Json root = Json::parse(buffer.str());
+        Json root;
+        std::string error;
+        if (!settings_read("transformPresets", root, error)) throw std::runtime_error(error);
+        if (root.is_null()) return true;
         for (const Json& item : root.elements()) {
             if (presets.size() == 5) break;
             if (!item.is_object() || !item.get("name").is_string() || !item.get("params").is_object()) continue;
@@ -250,14 +249,12 @@ bool save_transform_presets(const std::vector<TransformPreset>& presets) {
         item.set("params", params);
         entries.push_back(item);
     }
-    std::ofstream output(data_file("transform_presets.json"), std::ios::binary | std::ios::trunc);
-    if (!output.good()) {
-        std::cout << "无法保存自定义预设。" << std::endl;
+    std::string error;
+    if (!settings_write("transformPresets", Json::array(entries), error)) {
+        std::cout << "保存自定义预设失败: " << error << std::endl;
         return false;
     }
-    output << Json::array(entries).dump(2);
-    if (!output.good()) std::cout << "保存自定义预设失败。" << std::endl;
-    return output.good();
+    return true;
 }
 
 bool build_custom_transform_params(const Json& options, TransformParams& params) {
@@ -329,7 +326,7 @@ void show_transform_params(const TransformPreset& preset) {
 void manage_transform_presets(const Json& options, std::vector<TransformPreset>& presets) {
     while (true) {
         std::cout << "\n自定义转换预设（" << presets.size() << "/5）" << std::endl;
-        std::cout << "持久化文件: " << data_file("transform_presets.json") << std::endl;
+        std::cout << "持久化文件: " << data_file("settings.json") << std::endl;
         if (presets.empty()) std::cout << "（暂无预设）" << std::endl;
         for (size_t i = 0; i < presets.size(); ++i) std::cout << "[" << (i + 1) << "] " << presets[i].name << std::endl;
         std::cout << "a 添加 | v 序号查看 | e 序号修改 | d 序号删除 | q 返回" << std::endl;
@@ -844,7 +841,7 @@ void calculate_rank_changes(double calculated_score, const std::string& selected
               << std::endl;
     std::cout << "加权排位分: " << format_fixed(old_score, 2) << " -> " << format_fixed(new_score, 2) << " ("
               << (added_score >= 0.0 ? "+" : "") << format_fixed(added_score, 2)
-              << std::endl;
+              << ")" << std::endl;
     std::cout << "全球排名: " << old_global_rank.str() << " -> " << new_global_rank.str() << " (" << global_delta << ")"
               << std::endl;
     std::cout << "国家排名: " << old_country_rank.str() << " -> " << new_country_rank.str() << " (" << country_delta
@@ -942,7 +939,8 @@ void handle_pp_calc() {
         }
     }
 
-    const std::optional<double> accuracy_parsed = try_parse_double(read_trimmed("XACC: "));
+    const std::optional<double> accuracy_parsed =
+        try_parse_double(read_trimmed("XACC（百分比；建议输入精确值，最多显示4位小数）: "));
     if (!accuracy_parsed.has_value()) {
         std::cout << "could not convert string to float" << std::endl;
         return;
@@ -981,16 +979,19 @@ void handle_pp_calc() {
     std::cout << "分数倍率: " << float_of(result.get("multiplier")) << "x" << std::endl;
     std::cout << "速度修正: " << float_of(result.get("speed_mod")) << "x" << std::endl;
     std::cout << "空敲修正: " << float_of(result.get("empty_tap_mod")) << "x" << std::endl;
-
-    const double raw_score = result.get("raw_score").as_double();
-    const double base_score_result = result.get("base_score").as_double();
-    std::cout << std::endl;
-    if (raw_score < base_score_result) {
-        std::cout << "PP分: " << float_of(result.get("base_score")) << " (" << float_of(result.get("raw_score")) << ")"
-                  << std::endl;
-    } else {
-        std::cout << "PP分: " << float_of(result.get("score")) << std::endl;
+    if (verbose_enabled()) {
+        if (result.get("xacc_curve_custom").as_bool()) {
+            std::cout << "[verbose] XACC曲线: 谱面自定义 (cutoff="
+                      << float_of(result.get("xacc_curve_cutoff").as_double() * 100.0) << "%, topMultiplier="
+                      << float_of(result.get("xacc_curve_top_multiplier")) << ", poleOffset="
+                      << float_of(result.get("xacc_curve_pole_offset")) << ")" << std::endl;
+        } else {
+            std::cout << "[verbose] XACC曲线: 标准默认曲线" << std::endl;
+        }
     }
+
+    std::cout << std::endl;
+    std::cout << "PP分: " << float_of(result.get("score")) << std::endl;
 
     const std::string calc_rank = lower_ascii(read_trimmed("\n是否计算排名变化? (y/N): "));
     if (calc_rank == "y") {
@@ -1039,7 +1040,7 @@ bool acc_load_model(XaccModel& model) {
     return true;
 }
 
-// Prompt loop for the difficulty coefficients.  They live in xacc.json as exact
+// Prompt loop for the difficulty coefficients.  They live in settings.json as exact
 // integer units, so the edit round-trips exactly.  Judgement weights are NOT part
 // of this: they are the fixed game rule that defines XACC.
 bool acc_edit_units(XaccModel& model) {

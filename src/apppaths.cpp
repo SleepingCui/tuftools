@@ -3,9 +3,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <system_error>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -22,6 +25,92 @@
 
 namespace tuf {
 namespace {
+
+constexpr const char* kSettingsFile = "settings.json";
+
+struct LegacyDataFile {
+    const char* filename;
+    const char* section;
+};
+
+constexpr LegacyDataFile kLegacyDataFiles[] = {
+    {"xacc.json", "xacc"},
+    {"difficulties.json", "difficulties"},
+    {"transform_presets.json", "transformPresets"},
+    {"costs.json", "legacyCosts"},
+    {"weights.json", nullptr},
+};
+
+void retire_legacy_file(const std::string& path) {
+    std::string backup = path + ".v1.bak";
+    for (unsigned int suffix = 1; std::filesystem::exists(backup); ++suffix) {
+        backup = path + ".v1.bak." + std::to_string(suffix);
+    }
+    std::error_code ec;
+    std::filesystem::rename(path, backup, ec);
+}
+
+bool write_settings_file(const Json& root, std::string& error) {
+    std::ofstream output(data_file(kSettingsFile), std::ios::binary | std::ios::trunc);
+    if (!output.good()) {
+        error = std::string("无法写入 ") + kSettingsFile;
+        return false;
+    }
+    output << root.dump(2);
+    if (!output.good()) {
+        error = std::string("写入 ") + kSettingsFile + " 失败";
+        return false;
+    }
+    return true;
+}
+
+bool load_settings_root(Json& root, std::string& error) {
+    const std::string path = data_file(kSettingsFile);
+    std::ifstream input(path, std::ios::binary);
+    if (input.good()) {
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        try {
+            root = Json::parse(buffer.str());
+        } catch (const std::exception& e) {
+            error = std::string(kSettingsFile) + " 无法解析: " + e.what();
+            return false;
+        }
+        if (!root.is_object()) {
+            error = std::string(kSettingsFile) + " 顶层必须是 JSON 对象";
+            return false;
+        }
+    } else {
+        root = Json::object();
+    }
+
+    bool imported = false;
+    std::vector<std::string> obsolete_files;
+    for (const LegacyDataFile& legacy : kLegacyDataFiles) {
+        const std::string legacy_path = data_file(legacy.filename);
+        std::ifstream old_input(legacy_path, std::ios::binary);
+        if (!old_input.good()) continue;
+
+        if (legacy.section != nullptr && !root.has(legacy.section)) {
+            std::ostringstream buffer;
+            buffer << old_input.rdbuf();
+            try {
+                root.set(legacy.section, Json::parse(buffer.str()));
+                imported = true;
+                obsolete_files.push_back(legacy_path);
+            } catch (const std::exception&) {
+                // Keep malformed legacy files so their contents can be recovered.
+            }
+        } else {
+            obsolete_files.push_back(legacy_path);
+        }
+    }
+
+    if (imported && !write_settings_file(root, error)) return false;
+    // Keep a recoverable copy while removing the old .json names from active use.
+    for (const std::string& obsolete : obsolete_files) retire_legacy_file(obsolete);
+    return true;
+}
 
 std::string dir_of(const std::string& path) {
     const size_t pos = path.find_last_of("/\\");
@@ -147,6 +236,20 @@ std::string data_file(const std::string& name) {
 #else
     return dir + "/" + name;
 #endif
+}
+
+bool settings_read(const std::string& section, Json& value, std::string& error) {
+    Json root;
+    if (!load_settings_root(root, error)) return false;
+    value = root.get(section);
+    return true;
+}
+
+bool settings_write(const std::string& section, const Json& value, std::string& error) {
+    Json root;
+    if (!load_settings_root(root, error)) return false;
+    root.set(section, value);
+    return write_settings_file(root, error);
 }
 
 }  // namespace tuf
