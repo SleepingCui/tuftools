@@ -997,7 +997,7 @@ $$
 设当前在位置 $p$，剩余 item 集合为 $\mathcal S_p$。剩余 $R$ 个音符能产生的归一化损失增量集合：
 
 $$
-\mathcal R_p=\left\{\sum_{i\in\mathcal S_p}z_ir_i\ \middle|\ \sum z_i=R,\ z_i\ge0\right\}.
+\mathcal R_p=\{\sum_{i\in\mathcal S_p}z_ir_i\mid\sum z_i=R,\ z_i\ge0\}.
 $$
 
 它一定满足：
