@@ -653,15 +653,17 @@ $$
 设自由 item 集合为 $\mathcal F$，$|\mathcal F|=n$，自由判定数为 $M$。对 $t=0,\dots,M$、$k=0,\dots,tU$，定义：
 
 $$
-D_t[k]=\min_{\text{lex}}\left\{
-(c,n)\ \middle|\ 
+D_t[k]=\min_{\text{lex}}(c,n)
+$$
+
+约束为：
+
+$$
 \begin{aligned}
-&\sum_{i\in\mathcal F}y_i=t,\\
-&\sum_{i\in\mathcal F}y_ir_i=k,\\
-&c=\sum_{i\in\mathcal F}y_iC_i,\\
-&n=\sum_{i\in\mathcal F,\ i\ne b}y_i
+\sum_{i\in\mathcal F}y_i&=t, &\sum_{i\in\mathcal F}y_ir_i&=k,\\
+c&=\sum_{i\in\mathcal F}y_iC_i, &n&=\sum_{i\in\mathcal F,\ i\ne b}y_i,\\
+y_i&\in\mathbb Z_{\ge0} &&(i\in\mathcal F).
 \end{aligned}
-\right\}.
 $$
 
 其中 $\min_{\text{lex}}$ 先比 $c$，再比 $n$。不可达时记为 $+\infty$。
@@ -682,11 +684,8 @@ $$
 递推：
 
 $$
-D_t[k]=\min_{\text{lex}}\left\{
-D_{t-1}[k-r_i]+(C_i,\mathbf 1_{i\ne b})
-\ \middle|\ 
-i\in\mathcal F,\ r_i\le k
-\right\}.
+D_t[k]=\min_{\substack{i\in\mathcal F\\r_i\le k}}
+\bigl(D_{t-1}[k-r_i]+(C_i,\mathbf 1_{i\ne b})\bigr).
 $$
 
 直白地说：
