@@ -207,7 +207,7 @@ $$
 目标中心对应的分数单位：
 
 $$
-T=\operatorname{round}\!\left(\frac{aNs}{100\cdot10^d}\right).
+T=\mathrm{round}\!\left(\frac{aNs}{100\cdot10^d}\right).
 $$
 
 `round` 对正数按四舍五入（距离相等时远离 0）。
@@ -271,7 +271,7 @@ a=9900,\ d=2,\ s=1000.
 $$
 
 $$
-T=\operatorname{round}\!\left(\frac{9900\cdot100\cdot1000}{100\cdot100}\right)=99000.
+T=\mathrm{round}\!\left(\frac{9900\cdot100\cdot1000}{100\cdot100}\right)=99000.
 $$
 
 $$
@@ -285,7 +285,7 @@ $$
 #### 例 B：$N=3$，目标 $33.33\%$
 
 $$
-T=\operatorname{round}\!\left(\frac{3333\cdot3\cdot1000}{10000}\right)=1000.
+T=\mathrm{round}\!\left(\frac{3333\cdot3\cdot1000}{10000}\right)=1000.
 $$
 
 $$
@@ -326,7 +326,7 @@ $$
 
 $$
 \Bigl(
-d(x),\ C(x),\ n(x),\ \operatorname{lex}(x)
+d(x),\ C(x),\ n(x),\ \mathrm{lex}(x)
 \Bigr),
 $$
 
@@ -351,7 +351,7 @@ $$
 - $d$：离目标最近的分数单位差；
 - $C$：总难度系数；
 - $n$：非基准判定数量；
-- $\operatorname{lex}$：最终确定性字典序。
+- $\mathrm{lex}$：最终确定性字典序。
 
 ### 4.2 字典序比较
 
@@ -362,14 +362,14 @@ x\succ x'
 d(x)<d(x'), & \text{否则}\\
 C(x)<C(x'), & \text{否则}\\
 n(x)<n(x'), & \text{否则}\\
-\operatorname{lex}(x)>\operatorname{lex}(x').
+\mathrm{lex}(x)>\mathrm{lex}(x').
 \end{cases}
 $$
 
 等价地，按四元组从小到大取最小：
 
 $$
-\min_{\text{lex}}\bigl(d(x),C(x),n(x),-\operatorname{lex}(x)\bigr).
+\min_{\text{lex}}\bigl(d(x),C(x),n(x),-\mathrm{lex}(x)\bigr).
 $$
 
 ### 4.3 lex 的定义
@@ -377,7 +377,7 @@ $$
 按判定键顺序 $\mathcal K=(k_1,k_2,\dots)$ 逐项比较：
 
 $$
-\operatorname{lex}(x)>\operatorname{lex}(x')
+\mathrm{lex}(x)>\mathrm{lex}(x')
 \iff
 \exists j:\ 
 x_{k_j}>x'_{k_j}
@@ -1181,7 +1181,7 @@ $$
 在当前 item 的可行区间 $[z_{\text{low}},z_{\text{high}}]$ 内，优先尝试闭式中心：
 
 $$
-z_0=\operatorname{round}\left(\frac{k^{*}-a}{r_i}\right),
+z_0=\mathrm{round}\left(\frac{k^{*}-a}{r_i}\right),
 $$
 
 再向两侧扩展：
@@ -1871,7 +1871,7 @@ $$
 $$
 
 $$
-T=\operatorname{round}\left(\frac{aNs}{100\cdot10^d}\right).
+T=\mathrm{round}\left(\frac{aNs}{100\cdot10^d}\right).
 $$
 
 $$
@@ -1888,7 +1888,7 @@ S=S_{\text{base}}+gk.
 $$
 
 $$
-\text{objective}=\min_{\text{lex}}\bigl(|S-T|,\ C_f+\sum y_iC_i,\ M-y_b,\ -\operatorname{lex}(y)\bigr).
+\text{objective}=\min_{\text{lex}}\bigl(|S-T|,\ C_f+\sum y_iC_i,\ M-y_b,\ -\mathrm{lex}(y)\bigr).
 $$
 
 ### 15.2 算法对照
