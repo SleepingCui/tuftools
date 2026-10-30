@@ -7,6 +7,7 @@
 #include "api.hpp"
 #include "console.hpp"
 #include "info.hpp"
+#include "jsoncli.hpp"
 #include "menus.hpp"
 #include "version.hpp"
 
@@ -21,6 +22,16 @@ int run(int argc, char** argv) {
     program.add_argument("--no-cache").help("Do not read or write the response cache")
         .default_value(false)
         .implicit_value(true);
+    program.add_argument("--json", "-j")
+        .help("Non-interactive JSON mode: read one JSON request, print one JSON response")
+        .default_value(false)
+        .implicit_value(true);
+    program.add_argument("--request").help("JSON request text (implies --json; \"-\" reads stdin)");
+    program.add_argument("--request-file").help("Read the JSON request from this file (implies --json)");
+    program.add_argument("--json-indent")
+        .help("Pretty-print the JSON response with N spaces (default 0: one compact line)")
+        .scan<'i', int>()
+        .default_value(0);
 
     try {
         program.parse_args(argc, argv);
@@ -44,6 +55,28 @@ int run(int argc, char** argv) {
     tuf::set_verbose(verbose);
     tuf::set_verbose_json(verbose && dump_json);
     tuf::set_cache_enabled(!no_cache);
+
+    tuf::JsonCliOptions json_options;
+    const auto request = program.present<std::string>("--request");
+    if (request) {
+        json_options.request = *request;
+    }
+    const auto request_file = program.present<std::string>("--request-file");
+    if (request_file) {
+        json_options.request_file = *request_file;
+    }
+    if (!json_options.request.empty() && json_options.request != "-" && !json_options.request_file.empty()) {
+        std::cerr << "--request 与 --request-file 不能同时使用" << std::endl;
+        return 2;
+    }
+    if (program.get<bool>("--json") || request || request_file) {
+        const int indent = program.get<int>("--json-indent");
+        json_options.pretty = indent > 0;
+        json_options.indent = indent > 0 ? indent : 2;
+        // Response documents are the only thing allowed on stdout; the JSON
+        // layer flushes the cache itself while stdout is redirected.
+        return tuf::run_json_cli(json_options);
+    }
 
     std::cout << "=== TUF Tools ===" << std::endl;
     std::cout << "Github: github.com/sleepingcui/tuftools TUF: tuforums.com" << std::endl;

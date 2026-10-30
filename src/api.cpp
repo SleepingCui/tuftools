@@ -44,15 +44,31 @@ std::mutex g_print_mutex;
 
 // ------------------------------------------------------------- response cache
 //
-// Keyed by the full request URL, valued by the raw response body.  The body is
-// kept as text rather than a parsed tree so a cache hit replays byte-for-byte
-// what the network would have returned, and so the cache stays valid when the
-// parser changes.
+// Keyed by the full request URL, valued by the raw response body together with
+// the validators the server supplied for it.  The body is kept as text rather
+// than a parsed tree so a 304 revalidation replays byte-for-byte what the
+// network would have returned, and so the cache stays valid when the parser
+// changes.
+//
+// A stored body is never served without asking the server first: every lookup
+// issues a conditional GET (If-None-Match / If-Modified-Since).  A 304 keeps the
+// stored body, a 200 replaces it, so there is no TTL and no stale window - the
+// price is one round trip per lookup, and no offline operation.
+struct CacheEntry {
+    std::string body;
+    std::string etag;
+    std::string last_modified;
+
+    // Without a validator a conditional GET is impossible, so such an entry is
+    // refetched in full once and then stored with whatever the server offers.
+    bool has_validator() const { return !etag.empty() || !last_modified.empty(); }
+};
+
 bool g_cache_enabled = true;
 bool g_cache_loaded = false;
 bool g_cache_dirty = false;
 std::atomic<long long> g_cache_hits{0};
-std::map<std::string, std::string> g_cache;
+std::map<std::string, CacheEntry> g_cache;
 std::mutex g_cache_mutex;
 
 double elapsed_ms(Clock::time_point t0, Clock::time_point t1) {
@@ -64,9 +80,11 @@ void print_locked(const std::string& line) {
     std::cout << line << std::endl;
 }
 
-// Reads cache.json once, on first use.  Every failure path leaves the cache
-// empty and usable instead of reporting an error: a broken cache file must never
-// stop a lookup from reaching the network.
+// Reads cache.json once, on first use.  Both the current shape
+// ({url: {body, etag, lastModified}}) and the legacy one ({url: body}) are
+// accepted, so an old cache file keeps working.  Every failure path leaves the
+// cache empty and usable instead of reporting an error: a broken cache file must
+// never stop a lookup from reaching the network.
 void cache_load_locked() {
     if (g_cache_loaded) return;
     g_cache_loaded = true;
@@ -78,8 +96,25 @@ void cache_load_locked() {
         const Json parsed = Json::parse(buffer.str());
         if (!parsed.is_object()) return;
         for (const std::pair<std::string, Json>& entry : parsed.items()) {
-            if (!entry.second.is_string()) continue;
-            g_cache[entry.first] = entry.second.as_string();
+            const Json& value = entry.second;
+            if (value.is_string()) {
+                // Legacy entry: body only.  It carries no validator, so the next
+                // lookup refetches it once and rewrites it in the current shape.
+                CacheEntry legacy;
+                legacy.body = value.as_string();
+                g_cache[entry.first] = legacy;
+                continue;
+            }
+            if (!value.is_object()) continue;
+            const Json body = value.get("body");
+            if (!body.is_string()) continue;
+            CacheEntry loaded;
+            loaded.body = body.as_string();
+            const Json etag = value.get("etag");
+            if (etag.is_string()) loaded.etag = etag.as_string();
+            const Json last_modified = value.get("lastModified");
+            if (last_modified.is_string()) loaded.last_modified = last_modified.as_string();
+            g_cache[entry.first] = loaded;
         }
         if (g_verbose) {
             print_locked("[cache] 载入 " + std::to_string(g_cache.size()) + " 条缓存 (" + data_file(kCacheFile) + ")");
@@ -94,8 +129,12 @@ void cache_load_locked() {
 bool cache_write_locked(std::string& error) {
     try {
         Json root = Json::object();
-        for (const std::pair<const std::string, std::string>& entry : g_cache) {
-            root.set(entry.first, entry.second);
+        for (const std::pair<const std::string, CacheEntry>& entry : g_cache) {
+            Json value = Json::object();
+            value.set("body", entry.second.body);
+            if (!entry.second.etag.empty()) value.set("etag", entry.second.etag);
+            if (!entry.second.last_modified.empty()) value.set("lastModified", entry.second.last_modified);
+            root.set(entry.first, value);
         }
         std::ofstream file(data_file(kCacheFile), std::ios::binary | std::ios::trunc);
         if (!file.good()) {
@@ -115,7 +154,6 @@ int start_request(const std::string& url) {
     const int index = g_count.fetch_add(1) + 1;
     if (index == 1) {
         g_span_start = Clock::now();
-        if (!g_verbose) print_locked("查询中...");
     }
     if (g_verbose) {
         std::string line = "#" + std::to_string(index) + " GET " + url;
@@ -169,27 +207,31 @@ std::string format_body_block(const std::string& body) {
 }
 
 Json get_once(const std::string& url) {
-    // A hit never counts as a request, so the "查询中..." banner and the request
-    // total seen by stats() both reflect real network traffic only.
+    // Look the entry up first: with the cache on, a lookup is always a
+    // revalidation, so the stored body is only reused if the server says 304.
+    CacheEntry cached;
+    bool have_cached = false;
     if (g_cache_enabled) {
         std::lock_guard<std::mutex> guard(g_cache_mutex);
         cache_load_locked();
         auto it = g_cache.find(url);
         if (it != g_cache.end()) {
-            g_cache_hits.fetch_add(1);
-            if (g_verbose) {
-                print_locked("    <- #cached " + url + "  (" + std::to_string(it->second.size()) + " B)");
-            }
-            if (it->second.empty()) return Json();
-            return Json::parse(it->second);
+            cached = it->second;
+            have_cached = true;
         }
+    }
+
+    HttpHeaders headers;
+    if (have_cached) {
+        if (!cached.etag.empty()) headers.emplace_back("If-None-Match", cached.etag);
+        if (!cached.last_modified.empty()) headers.emplace_back("If-Modified-Since", cached.last_modified);
     }
 
     const int index = start_request(url);
     const Clock::time_point t0 = Clock::now();
     HttpResponse response;
     try {
-        response = http_get(url, g_proxy, 30);
+        response = http_get(url, g_proxy, 30, HttpProgressCallback(), headers);
     } catch (const HttpError& e) {
         const Clock::time_point t1 = Clock::now();
         g_span_end = t1;
@@ -214,6 +256,37 @@ Json get_once(const std::string& url) {
     const Clock::time_point t1 = Clock::now();
     g_span_end = t1;
     g_api_us.fetch_add(static_cast<long long>(elapsed_ms(t0, t1) * 1000.0));
+
+    if (response.status == 304 && have_cached) {
+        // The server confirmed the stored body is current.  This still cost a
+        // round trip - start_request already counted it - but the body (and the
+        // JSON parse result) is taken from the cache.
+        g_cache_hits.fetch_add(1);
+        if (g_verbose) {
+            print_locked("    <- #" + std::to_string(index) + " 304 " + response.reason + "  " +
+                         format_fixed(elapsed_ms(t0, t1), 2) + " ms  复用缓存 " +
+                         std::to_string(cached.body.size()) + " B");
+        }
+        if (g_cache_enabled) {
+            std::lock_guard<std::mutex> guard(g_cache_mutex);
+            cache_load_locked();
+            auto it = g_cache.find(url);
+            if (it != g_cache.end()) {
+                // A 304 may rotate the validator; keep whichever is newest.
+                if (!response.etag.empty() && response.etag != it->second.etag) {
+                    it->second.etag = response.etag;
+                    g_cache_dirty = true;
+                }
+                if (!response.last_modified.empty() && response.last_modified != it->second.last_modified) {
+                    it->second.last_modified = response.last_modified;
+                    g_cache_dirty = true;
+                }
+            }
+        }
+        if (cached.body.empty()) return Json();
+        return Json::parse(cached.body);
+    }
+
     if (g_verbose) {
         std::string line = "    <- #" + std::to_string(index) + " " + std::to_string(response.status) + " " +
                            response.reason + "  " + format_fixed(elapsed_ms(t0, t1), 2) + " ms  " +
@@ -227,7 +300,11 @@ Json get_once(const std::string& url) {
     if (g_cache_enabled) {
         std::lock_guard<std::mutex> guard(g_cache_mutex);
         cache_load_locked();
-        g_cache[url] = response.body;
+        CacheEntry fresh;
+        fresh.body = response.body;
+        fresh.etag = response.etag;
+        fresh.last_modified = response.last_modified;
+        g_cache[url] = fresh;
         g_cache_dirty = true;
     }
     return Json::parse(response.body);
@@ -310,7 +387,7 @@ void stats() {
     if (count || hits) {
         const double span = elapsed_ms(g_span_start, g_span_end);
         const double api_ms = static_cast<double>(g_api_us.load()) / 1000.0;
-        const std::string hit_text = hits ? ("，命中缓存 " + std::to_string(hits) + " 次") : std::string();
+        const std::string hit_text = hits ? ("，缓存复用 " + std::to_string(hits) + " 次 (304)") : std::string();
         if (g_verbose) {
             print_locked("used " + std::to_string(count) + " requests, span " + format_fixed(span, 2) +
                          " ms (请求累计 " + format_fixed(api_ms, 2) + " ms)" + hit_text);

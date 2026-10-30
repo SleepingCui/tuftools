@@ -40,7 +40,7 @@
 - **谱面查询**：按名称关键词或谱面 ID 搜索/读取谱面；展示谱面元数据；支持下载原始 ZIP、转换 ZIP、V2 `.adofai`。
 - **PP 计算器**：按难度等级、API 谱面或手填 BaseScore 三种方式构造谱面数据；输入 XACC、空敲数、速度、NoHoldTap 等，计算 PP；可进一步估算排位分/全球排名/地区排名变化。
 - **XACC 计算器**：按判定分布正算 XACC；按目标 XACC 反推判定分布；列出与最优解等效的判定组合；编辑难度系数与求解器预算；切换求解器。
-- **HTTP 响应缓存**：按完整 URL 缓存响应体到 `cache.json`，支持 `--no-cache` 与主菜单清空缓存。
+- **HTTP 响应缓存**：按完整 URL 缓存响应体与验证器（ETag / Last-Modified）到 `cache.json`，重复查询以条件 GET 校验（304 复用、200 更新）；支持 `--no-cache` 与主菜单清空缓存。
 - **跨平台**：Windows 使用 WinHTTP，macOS/Linux 使用 libcurl；数据目录可在可执行文件旁或用户数据目录之间自动选择。
 
 ### 1.2 关键事实
@@ -67,18 +67,19 @@
 2. **尽量复刻原 Python 工具语义**：`pyjson.hpp`、`numfmt.hpp`、`console.hpp` 专门实现 Python 的 `dict.get`、浮点 `repr`、`round`、`input()`、`float()`/`int()` 等行为。
 3. **XACC 精确整数化**：`xacc_model.hpp` / `xacc_solver.hpp` 把权重、成本、目标全部转成整数单元，避免浮点数导致正算与反推给出不同答案；求解器有明确的最优性标志与预算。
 4. **网络故障可降级**：排名请求失败只显示 `?`，通关记录拉取失败返回已取到的部分，配置损坏通常回退默认值；只有无法继续的操作才抛异常。
-5. **缓存透明**：所有 JSON API GET 统一经过 `api::fetchapi_sync`，命中缓存不增加请求计数，缓存文件损坏时自动退化为无缓存；文件下载直接使用 `http_get`，不进入缓存。
+5. **缓存透明**：所有 JSON API GET 统一经过 `api::fetchapi_sync`；缓存条目只会把请求变成条件 GET（304 复用、200 更新），因此请求计数与耗时统计始终反映真实的往返，缓存文件损坏时自动退化为无缓存；文件下载直接使用 `http_get`，不进入缓存。
 
 ### 1.4 阅读代码的入口顺序
 
 建议按以下顺序阅读：
 
 1. [`src/main.cpp`](../src/main.cpp) —— CLI 与主菜单。
-2. [`src/menus.cpp`](../src/menus.cpp) —— 四个业务菜单与下载/转换流程。
-3. [`src/info.cpp`](../src/info.cpp) —— 玩家、排名、通关记录、表格排版。
-4. [`src/tools.cpp`](../src/tools.cpp) + [`src/weights.cpp`](../src/weights.cpp) —— PP 计算与固定判定权重。
-5. [`src/xacc_model.cpp`](../src/xacc_model.cpp) + [`src/xacc_solver.cpp`](../src/xacc_solver.cpp) —— XACC 精确模型与逆推。
-6. [`src/api.cpp`](../src/api.cpp) + [`src/http.cpp`](../src/http.cpp) + [`src/apppaths.cpp`](../src/apppaths.cpp) —— 网络、缓存、数据目录。
+2. [`src/jsoncli.cpp`](../src/jsoncli.cpp) —— 非交互 JSON 模式（`--json`）：请求/响应协议与 12 个操作。
+3. [`src/menus.cpp`](../src/menus.cpp) —— 四个业务菜单与下载/转换流程。
+4. [`src/info.cpp`](../src/info.cpp) —— 玩家、排名、通关记录、表格排版。
+5. [`src/tools.cpp`](../src/tools.cpp) + [`src/weights.cpp`](../src/weights.cpp) —— PP 计算与固定判定权重。
+6. [`src/xacc_model.cpp`](../src/xacc_model.cpp) + [`src/xacc_solver.cpp`](../src/xacc_solver.cpp) —— XACC 精确模型与逆推。
+7. [`src/api.cpp`](../src/api.cpp) + [`src/http.cpp`](../src/http.cpp) + [`src/apppaths.cpp`](../src/apppaths.cpp) —— 网络、缓存、数据目录。
 
 ---
 
@@ -88,6 +89,7 @@
 
 ```text
 tuftools [--proxy VAR] [-v|--verbose] [--dump-json] [--no-cache]
+tuftools --json [-j] [--json-indent N] [--request JSON | --request-file PATH]
 ```
 
 | 参数 | 作用 |
@@ -95,17 +97,21 @@ tuftools [--proxy VAR] [-v|--verbose] [--dump-json] [--no-cache]
 | `--proxy <url>` | 设置 HTTP(S) 代理；Windows 传给 `WinHttpOpen`，其他平台传给 `CURLOPT_PROXY`。只支持一个代理 URL，不读取代理认证参数。 |
 | `-v`, `--verbose` | 打印每个请求的 URL、代理、状态码、耗时、响应大小；并输出 XACC 求解器的详细 trace。 |
 | `--dump-json` | 与 `-v` 联用时，额外打印响应体（JSON 会格式化，其他内容原样）；单个响应最多打印 256 KiB。单独使用无效。 |
-| `--no-cache` | 本次运行不读也不写 `cache.json`。主菜单“清空缓存”会提示该限制。 |
+| `--no-cache` | 本次运行不读也不写 `cache.json`，也不发条件请求头。主菜单“清空缓存”会提示该限制。 |
+| `-j`, `--json` | 非交互 JSON 模式：从 stdin（或 `--request` / `--request-file`）读一个 JSON 请求，向 stdout 写一个 JSON 响应后退出；不打印横幅、不进入主菜单。详见 [2.4](#24-json-模式非交互--供其他程序调用)。 |
+| `--request <json>` | 把请求文档直接写在参数里，隐含 `--json`；值为 `-` 时从 stdin 读取。 |
+| `--request-file <path>` | 从文件读取请求文档（UTF-8，允许 BOM），隐含 `--json`；与 `--request` 同时给出会报错返回 2。 |
+| `--json-indent <n>` | 以 `n` 空格缩进输出 JSON；默认 `0`（单行紧凑）。 |
 
-`--help` 由 argparse 自动生成；程序**没有**暴露 `--version`，版本信息在启动横幅中打印（`TUF_VERSION` / `TUF_BUILD_TIME`）。
+`--help` 由 argparse 自动生成；程序**没有**暴露 `--version`，版本信息在启动横幅中打印（`TUF_VERSION` / `TUF_BUILD_TIME`）。JSON 模式（`--json` / `--request` / `--request-file`）不打印横幅，也不创建交互菜单。
 
 退出码：
 
 | 退出码 | 场景 |
 | --- | --- |
-| `0` | 正常 `q` 退出；或 stdin 在交互中被关闭（`InputClosed`，按正常退出处理） |
-| `1` | 主流程未捕获的 `std::exception` |
-| `2` | 命令行参数解析失败（argparse 抛异常，`main` 打印帮助并返回 2） |
+| `0` | 交互模式：正常 `q` 退出，或 stdin 在交互中被关闭（`InputClosed`，按正常退出处理）。JSON 模式：全部操作成功。 |
+| `1` | 交互模式：主流程未捕获的 `std::exception`。JSON 模式：至少一个操作失败（响应仍是合法 JSON）。 |
+| `2` | 参数解析失败（argparse 抛异常，`main` 打印帮助并返回 2）。JSON 模式：请求文档本身无法处理 —— 空输入、非法 JSON、顶层既不是对象也不是数组、请求文件读不到、`--request` 与 `--request-file` 同时出现。此时 stdout 仍输出一个 `{"ok":false,...,"error":{...}}` 文档。 |
 
 ### 2.2 环境变量
 
@@ -140,6 +146,131 @@ q. 退出
 
 ---
 
+### 2.4 JSON 模式（非交互 / 供其他程序调用）
+
+目的：让其他工具（脚本、GUI、编辑器插件）直接调用 tuftools，而不必模拟终端按键。一次调用 = 一个 JSON 文档进、一个 JSON 文档出，`stdout` 上除响应外没有任何内容。
+
+```text
+tuftools --json [--json-indent N] [--request JSON | --request-file PATH] [--no-cache] [--proxy URL] [-v]
+```
+
+请求来源优先级：`--request <json>`（值为 `-` 表示 stdin）> `--request-file <path>` > stdin。`--json` 可以单独使用，表示“从 stdin 读”。
+
+> **Windows shell 的引号陷阱**：PowerShell 5.1 和 `cmd` 会在把参数交给新进程之前处理掉引号，`--request '{"op":"x"}'` 到进程时已经变成 `{op:x}`（`cmd` 里则是 `{"op":"x"}` 保留反斜杠）。这是 shell 与 `argv` 拼接层的问题，与解析器无关；`jsoncli.cpp` 检测到“请求里一个双引号都没有”时会在错误消息里给出提示。稳妥写法：用管道喂 stdin、用 `--request-file`，或在 PowerShell 里把双引号写成 `\"`。
+
+#### 请求
+
+```json
+{"id": 1, "op": "xacc.calc", "counts": {"perfect": 1000, "failMiss": 5}}
+```
+
+- `op` 必填，操作名（小写 + 点，大小写敏感），清单见下文。
+- `id` 可选，任意 JSON 值，原样回显；批量调用时用它配对请求与响应。
+- 其余字段是该操作的参数；多数参数同时接受 camelCase 与 snake_case 别名（`levelId` / `level_id`、`noHoldTap` / `no_hold_tap`），取第一个出现的。
+- 数字参数也接受数字字符串（`"98.5"`）；布尔参数接受 `true`/`false`、`"true"`/`"false"`、`1`/`0`。
+- 顶层是数组时表示**批量**：按顺序逐个执行，返回同样长度的响应数组；某个元素不是对象时，该位置的响应是 `{"ok":false,...,"error":{"code":"invalid_request"}}`，不影响其他元素。
+
+#### 响应
+
+成功：
+
+```json
+{"ok": true, "op": "xacc.calc", "elapsed_ms": 1.578, "result": {...}}
+```
+
+失败：
+
+```json
+{"ok": false, "op": "player.get", "id": "0000000000000001", "elapsed_ms": 301.896,
+ "error": {"code": "api", "message": "查询玩家: 发送请求失败: ..."}}
+```
+
+- `ok` / `op` / `elapsed_ms` 总会出现；`id` 只在请求带 `id` 时出现；`result` 与 `error` 二选一。
+- `elapsed_ms` 是该操作自身的耗时（毫秒，3 位小数）。
+- 需要“展示用字符串”的字段会额外给出 `*_text`（例如 `xacc_text`），便于沿用交互模式的显示精度。
+
+`error.code` 取值：
+
+| code | 含义 |
+| --- | --- |
+| `invalid_json` | 请求文本不是合法 JSON（退出码 2）。 |
+| `invalid_request` | 请求不是对象、缺少字符串 `op`、或顶层类型不支持（退出码 2 或 1）。 |
+| `unknown_op` | `op` 不在操作清单里。 |
+| `invalid_input` | 参数缺失、类型不对、超出范围、判定键不属于当前模式。 |
+| `not_found` | 玩家/谱面不存在，或搜索无结果。 |
+| `ambiguous` | 名字搜索命中多个玩家；`error.candidates[]` 给出最多 10 个 `{index,id,name,country,rankedScore}`，请改用 `id`。 |
+| `api` | 网络或 API 层失败（`message` 带原始错误）。 |
+| `cache` | 清空缓存失败。 |
+| `config` | `settings.json` 的 XACC 配置读取失败。 |
+| `unknown_difficulty` | `pp.calc` 的 `difficulty` 不在难度库里。 |
+| `overflow` | 判定数量过大，整数运算溢出。 |
+| `io_error` | `--request-file` 指向的文件读不到。 |
+| `internal` | 未预料的 C++ 异常。 |
+
+#### 操作清单
+
+| `op` | 主要参数 | `result` 主要字段 |
+| --- | --- | --- |
+| `version` | — | `protocol`（当前 `1`）、`name`、`version`、`build_time`、`api_base`、`ops[]` |
+| `cache.clear` | — | `cleared`、`skipped`、`reason`；`--no-cache` 时 `skipped=true`，不落盘 |
+| `player.search` | `query`/`name`/`q`，或 `discord`（自动加 `@` 前缀） | `query`、`by`（`name`/`discord`）、`count`、`results[]`（API 原始数组） |
+| `player.get` | `id`/`playerId`/`player_id` | `player`（API 原始对象） |
+| `player.details` | `id`，或 `query`/`name`，或 `discord`；`includeRanks`、`includePasses`（默认 `true`）、`passLimit`（默认 100）、`passesFetchCap`（默认 64） | `matched_by`、`player`、`ranks`（7 项分数的全局/国家排名，`null` 表示未知）、`passes`（`total`/`count`/`truncated`/`rows[]`） |
+| `level.search` | `query`（全数字时按谱面 ID 查）；`sort`（`CLEARS`/`DOWNLOADS`/`LIKES`/`FAVORITES`/`BPM`/`TILECOUNT`/`DURATION`/`BASESCORE`/`ID`，可加 `_DESC`/`_ASC`，默认 `CLEARS_DESC`）、`order`（`asc`/`desc`）、`limit`（默认 10，上限 100）、`offset` | `query`、`sort`、`by_id`、`limit`、`offset`、`count`、`hasMore`、`results[]` |
+| `level.get` | `id`/`levelId`/`level_id` | `id`、`level`（API 原始详情对象） |
+| `pp.calc` | `levelId`（优先级最高），或 `difficulty`/`baseScore` 之一 + `tilecount`/`tiles`；`marathon`、`xacc`/`accuracy`（必填）、`misses`（默认 0）、`speed`（默认 1.0）、`noHoldTap` | `calculate_score` 的全部字段（`accuracy`、`accuracy_pct`、`score`、`raw_score`、`base_score`、`base_source`、`multiplier`、`speed_mod`、`empty_tap_mod`、`default_setting_mod`、`tilecount`、`xacc_curve_*`）+ `level_id`、`level` |
+| `xacc.calc` | `counts`（对象）或 `judgements`（数组，顺序 = 当前模式的判定键）；`xperfect` | `xperfect`、`total`、`weighted`、`score_units`、`score_scale`、`xacc`、`xacc_text`、`counts`（补齐全部键） |
+| `xacc.reverse` | `total`/`tilecount`/`tiles`、`xacc`/`accuracy`/`acc`（必填）、`fixed`（只锁写出的键）、`xperfect`、`solver`、`maxNodes`、`maxDpCells`、`maxSeconds` | `found`、`status`、`status_code`、`message`、`total`、`target`、`decimals`、`fixed`、`counts`（未找到时为 `null`）、`score_units`、`distance_units`、`cost_units`、`xacc`/`xacc_text`、`exact`、`optimal`、`solver`/`solver_code`、`nodes`、`pruned`、`incumbent_updates`、`states`、`cells`、`elapsed_ms`、`note` |
+| `xacc.equivalents` | 同 `xacc.reverse`，另加 `maxSolutions`（默认 64，上限 4096） | 上述字段 + `count`、`truncated`、`solutions[]`（每个元素是一份完整判定计数） |
+| `xacc.model` | — | `score_scale`、`cost_scale`、`max_nodes`、`max_dp_cells`、`max_seconds`、`order[]`、`weights{}`、`costs{}`、`solvers[{code,name}]` |
+
+补充约定：
+
+- 判定键顺序（`judgements` 数组、`counts` 输出顺序）：普通模式 `failMiss, tooEarly, early, ePerfect, perfect, lPerfect, late`；XPerfect 模式 `failMiss, tooEarly, early, ePerfect, +perfect, xperfect, -perfect, lPerfect, late`。
+- `fixed` 与 `counts` 语义不同：`counts` 会补齐未写出的键为 0（正算用），`fixed` 只锁写出的键（反推用）。
+- `xacc` 目标可以带 `%`（`"99.28%"`）；小数位数由输入字符串决定（`"99.28"` = 2 位）。反推结果 `exact=false` 表示该物量下到不了这个精度，此时给出最接近的可达值。
+- `solver` 接受 `automatic`/`auto`/`自动`、`exact_dp`/`dp`/`exact`/`精确`、`branch_and_bound`/`bb`/`分支定界`、`legacy_map_dp`/`legacy`/`map`/`旧版`，也接受数字 `0`（自动）与 `1..4`（按 `xacc.model.solvers` 顺序）。
+- `status_code` 取值：`ok`、`invalid_input`、`invalid_config`、`out_of_range`、`unreachable`、`budget_exhausted`。其中 `unreachable`（该精度下不存在可达区间）是**正常答案**：`ok:true`、`found:false`、退出码 0。
+
+#### 退出码与 stdout 纯净性
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 全部操作成功（包括 `found:false` 的反推）。 |
+| `1` | 至少一个操作失败；响应文档仍然完整。 |
+| `2` | 请求文档本身无法处理（空输入、非法 JSON、顶层不是对象/数组、请求文件读不到、`--request` 与 `--request-file` 同时给出）。 |
+
+执行期间 `std::cout` 被临时重定向到 `std::cerr`，因此 `-v` 日志、缓存提示、警告都在 stderr；JSON 模式不打印启动横幅，也不调用任何交互函数（`choose_player`、`search_level`、`read_trimmed` 等）。缓存刷盘在重定向范围内完成，`cache_flush()` 的异常不会影响退出码。
+
+#### 示例
+
+```bash
+# 正算 XACC
+printf '%s' '{"op":"xacc.calc","counts":{"perfect":1000,"lPerfect":10,"failMiss":5}}' | ./build/tuftools -j
+
+# 反推：物量 100、目标 95.00，锁死 perfect=90（其余判定自由分配）
+./build/tuftools --request '{"op":"xacc.reverse","total":100,"xacc":"95.00","fixed":{"perfect":90}}'
+
+# 批量 + 缩进输出
+./build/tuftools --request-file req.json --json-indent 2
+```
+
+`req.json`：
+
+```json
+[
+  {"id": "v", "op": "version"},
+  {"id": "p", "op": "pp.calc", "baseScore": 200, "tilecount": 1000, "xacc": 98.5},
+  {"id": "x", "op": "xacc.reverse", "total": 1000, "xacc": "99.28"}
+]
+```
+
+#### 未覆盖的功能
+
+JSON 模式只暴露“查询 + 计算”这类无副作用或幂等的操作。以下仍只能在交互模式里做：谱面下载与格式转换（`download_level_chart` 及转换预设）、排位分变化的 top-20 重算（`calculate_rank_changes`，需要选一个谱面替换成绩）、主菜单的 `stats()` 汇总输出、判定成本的交互式编辑（可直接改 `settings.json`，或用 `xacc.model` 读取当前值）。
+
+---
+
 ## 3. 仓库结构
 
 ```text
@@ -155,6 +286,7 @@ tuftools/
 ├── docs/doc.md                 # 本文档
 ├── src/
 │   ├── main.cpp                # CLI + 主菜单
+│   ├── jsoncli.cpp/.hpp        # 非交互 JSON 模式（--json 请求/响应、操作分发）
 │   ├── menus.cpp/.hpp          # PP / XACC / 谱面查询与下载菜单
 │   ├── info.cpp/.hpp           # 玩家、排名、通关记录、表格排版
 │   ├── tools.cpp/.hpp          # CostsMan / DiffMan / TUFScoreCalculator / XACC 兼容层
@@ -184,14 +316,15 @@ tuftools/
 | 文件 | 行数（约） | 职责 | 主要调用者 |
 | --- | ---: | --- | --- |
 | [`src/main.cpp`](../src/main.cpp) | 115 | 参数解析、全局配置、主循环、顶层异常处理 | 操作系统 |
+| [`src/jsoncli.cpp`](../src/jsoncli.cpp) / [`.hpp`](../src/jsoncli.hpp) | 1155 / 29 | JSON 模式：参数校验、12 个操作、响应封装、stdout 隔离 | `main` |
 | [`src/menus.cpp`](../src/menus.cpp) / [`.hpp`](../src/menus.hpp) | 1444 / 20 | 谱面搜索下载、PP 计算、排名变化、XACC 菜单 | `main` |
 | [`src/info.cpp`](../src/info.cpp) / [`.hpp`](../src/info.hpp) | 735 / 87 | 玩家搜索/详情/排名/通关记录/表格/分页 | `main`、`menus` |
 | [`src/tools.cpp`](../src/tools.cpp) / [`.hpp`](../src/tools.hpp) | 441 / 89 | 难度库、PP 计算、XACC 兼容 API | `menus`、`xacc_model`、`weights` |
 | [`src/weights.cpp`](../src/weights.cpp) | 46 | 正常/XPerfect 判定键顺序与固定权重 | `tools`、`menus`、`xacc_model`、`xacc_solver` |
 | [`src/xacc_model.cpp`](../src/xacc_model.cpp) / [`.hpp`](../src/xacc_model.hpp) | 643 / 125 | 整数模型、settings 读写、目标解析/窗口/格式化 | `menus`、`tools`、`xacc_solver` |
 | [`src/xacc_solver.cpp`](../src/xacc_solver.cpp) / [`.hpp`](../src/xacc_solver.hpp) | 1479 / 94 | 反推求解器、等效组合枚举 | `menus`、`tools` |
-| [`src/api.cpp`](../src/api.cpp) / [`.hpp`](../src/api.hpp) | 329 / 49 | 缓存、请求计数、批量并发、统计 | 所有业务模块 |
-| [`src/http.cpp`](../src/http.cpp) / [`.hpp`](../src/http.hpp) | 302 / 40 | 同步 HTTPS GET、进度回调、错误模型 | `api`、`menus` |
+| [`src/api.cpp`](../src/api.cpp) / [`.hpp`](../src/api.hpp) | 406 / 53 | 缓存、请求计数、批量并发、统计 | 所有业务模块 |
+| [`src/http.cpp`](../src/http.cpp) / [`.hpp`](../src/http.hpp) | 418 / 51 | 同步 HTTPS GET、进度回调、条件请求头、验证器、错误模型 | `api`、`menus` |
 | [`src/apppaths.cpp`](../src/apppaths.cpp) / [`.hpp`](../src/apppaths.hpp) | 255 / 28 | 数据目录探测、settings 读写、legacy 迁移 | `api`、`tools`、`xacc_model`、`menus` |
 | [`src/pyjson.hpp`](../src/pyjson.hpp) | 294 | Python 风格 JSON 访问/格式化/URL quote | 全项目 |
 | [`src/numfmt.hpp`](../src/numfmt.hpp) | 58 | `format_fixed` / `trim_fixed` / `format_g` / 小数位统计 | 全项目 |
@@ -387,7 +520,8 @@ flowchart TB
 
 | 源文件 | 直接包含的内部头文件 |
 | --- | --- |
-| `main.cpp` | `api.hpp`、`console.hpp`、`info.hpp`、`menus.hpp`、`version.hpp` |
+| `main.cpp` | `api.hpp`、`console.hpp`、`info.hpp`、`jsoncli.hpp`、`menus.hpp`、`version.hpp` |
+| `jsoncli.cpp` | `jsoncli.hpp`、`api.hpp`、`console.hpp`、`info.hpp`、`numfmt.hpp`、`pyjson.hpp`、`tools.hpp`、`version.hpp`、`xacc_model.hpp`、`xacc_solver.hpp` |
 | `menus.cpp` | `menus.hpp`、`api.hpp`、`apppaths.hpp`、`console.hpp`、`http.hpp`、`info.hpp`、`pyjson.hpp`、`numfmt.hpp`、`tools.hpp`、`xacc_solver.hpp` |
 | `info.cpp` | `info.hpp`、`api.hpp`、`console.hpp`、`numfmt.hpp` |
 | `tools.cpp` | `tools.hpp`、`api.hpp`、`apppaths.hpp`、`console.hpp`、`numfmt.hpp`、`xacc_model.hpp`、`xacc_solver.hpp` |
@@ -441,8 +575,9 @@ sequenceDiagram
 
 关键点：
 
+- 带 `--json` / `--request` / `--request-file` 时，`run` 在配置完 API 层后直接调用 `tuf::run_json_cli()` 并以它的返回值退出：不打印横幅、不进入主菜单循环（见 2.4、6.15）。
 - `setup_console_utf8()` 在参数解析之前调用；Windows 上设置控制台输入/输出代码页为 UTF-8，并关闭 `iostream` 与 stdio 的同步。
-- 业务处理的异常在**每轮菜单选择内部**被捕获（`main.cpp:92`），打印 `错误: ...` 后继续主菜单；`InputClosed` 被单独 `throw` 给 `main()`，最终按正常退出处理并刷新缓存。
+- 业务处理的异常在**每轮菜单选择内部**被捕获（`main.cpp:126`），打印 `错误: ...` 后继续主菜单；`InputClosed` 被单独 `throw` 给 `main()`，最终按正常退出处理并刷新缓存。
 - 程序没有后台线程常驻；所有网络请求都在当前调用栈内同步完成，唯一例外是 `fetchall_sync` 内部临时启动的线程（见 6.7）。
 
 ### 5.4 全局状态
@@ -452,7 +587,7 @@ sequenceDiagram
 | `BASE_URL` | `api.cpp` 静态常量 | 进程启动时读一次 `TUFTOOLS_API_BASE` |
 | 代理、verbose、verbose_json | `api.cpp` 文件级变量 | 由 `main` 启动时设置；之后只读为主 |
 | 请求计数、请求累计耗时、首/末请求时间 | `api.cpp` | `std::atomic`；`stats()` 打印并清零 |
-| HTTP 缓存 map / 命中计数 / dirty 标志 | `api.cpp` | 懒加载；`cache_flush()` 在退出时落盘 |
+| HTTP 缓存 map / 304 复用计数 / dirty 标志 | `api.cpp` | 懒加载；`cache_flush()` 在退出时落盘 |
 | 当前求解器 `g_acc_solver` | `menus.cpp` 匿名命名空间 | 会话级，启动为 `automatic`，不持久化 |
 | 难度名称缓存 `difficulty_tables()` | `info.cpp` 函数内 static | 首次需要时懒加载 `/v2/database/difficulties`，进程内复用 |
 | 数据目录 `data_dir()` | `apppaths.cpp` 函数内 static | 首次调用计算并缓存；之后不再变化 |
@@ -471,8 +606,9 @@ sequenceDiagram
 
 | 函数 | 位置 | 说明 |
 | --- | --- | --- |
-| `run(int, char**)` | [`main.cpp:15`](../src/main.cpp#L15) | 参数解析 → 配置 → 主循环 → `cache_flush()` |
-| `main(int, char**)` | [`main.cpp:103`](../src/main.cpp#L103) | `setup_console_utf8()` + 顶层异常处理 |
+| `run(int, char**)` | [`main.cpp:16`](../src/main.cpp#L16) | 参数解析 → 配置 →（JSON 模式则 `run_json_cli` 后直接返回）→ 主循环 → `cache_flush()` |
+| `main(int, char**)` | [`main.cpp:136`](../src/main.cpp#L136) | `setup_console_utf8()` + 顶层异常处理 |
+| `tuf::run_json_cli` | [`jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | JSON 模式的全部工作，见 6.15 |
 
 **参数解析**：使用 vendored argparse v3.1，`argparse::default_arguments::help` 只自动添加 `-h/--help`。`--proxy` 没有默认值，用 `present<std::string>` 判断是否提供；其余布尔参数使用 `.default_value(false).implicit_value(true)`。
 
@@ -503,7 +639,8 @@ try {
 **注意**：
 
 - `q` 是唯一退出方式；`Q` 会被当成无效输入。
-- 只有主菜单退出路径与顶层 `InputClosed` 路径会调用 `cache_flush()`；进程被强杀时缓存不会落盘（但网络响应已经在内存中，丢失的只是缓存持久化）。
+- 只有主菜单退出路径、顶层 `InputClosed` 路径、以及 JSON 模式的 `run_json_cli` 会调用 `cache_flush()`；进程被强杀时缓存不会落盘（但网络响应已经在内存中，丢失的只是缓存持久化）。
+- `--request` 与 `--request-file` 同时给出时，`run` 在打印横幅之前就向 stderr 报错并返回 2。
 - `stats()` 不是主菜单统一调用，而是由玩家查询和 PP 计算流程在结束时自行调用（见 6.8、6.13）。
 
 ---
@@ -703,7 +840,13 @@ flowchart TD
 #### 6.6.1 公共接口
 
 ```cpp
-struct HttpResponse { int status; std::string reason; std::string body; };
+struct HttpResponse {
+    int status;
+    std::string reason;
+    std::string body;
+    std::string etag;           // 原样保存（含引号），缺失为空
+    std::string last_modified;  // 原样保存，缺失为空
+};
 
 class HttpError : public std::runtime_error {
     int status() const;
@@ -712,10 +855,14 @@ class HttpError : public std::runtime_error {
 
 using HttpProgressCallback = std::function<void(uint64_t downloaded, uint64_t total)>;
 
+// 附加请求头，按顺序发送；缓存用它发条件 GET。
+using HttpHeaders = std::vector<std::pair<std::string, std::string>>;
+
 HttpResponse http_get(const std::string& url,
                       const std::string& proxy = "",
                       int timeout_sec = 30,
-                      const HttpProgressCallback& progress = {});
+                      const HttpProgressCallback& progress = {},
+                      const HttpHeaders& request_headers = {});
 std::string http_reason_from_status(int status);
 ```
 
@@ -723,7 +870,7 @@ std::string http_reason_from_status(int status);
 
 - 传输层失败（连不上、超时、TLS 失败、读取失败）→ `std::runtime_error`。
 - HTTP 状态码 `>= 400` → `HttpError`，同时携带 `status` 和响应体（便于 verbose 打印错误 JSON/HTML）。
-- 成功 → `HttpResponse`，`body` 完整读入内存。
+- 成功 → `HttpResponse`，`body` 完整读入内存；`304 Not Modified` 是**正常返回**（`status=304`、body 为空），不抛异常，由 `api.cpp` 决定是否复用缓存。
 
 #### 6.6.2 Windows（WinHTTP）实现
 
@@ -736,8 +883,9 @@ std::string http_reason_from_status(int status);
 | 连接 | `WinHttpConnect(host, port)` |
 | 创建请求 | `WinHttpOpenRequest(GET, path, secure ? WINHTTP_FLAG_SECURE : 0)` |
 | 解压 | 若 `WINHTTP_OPTION_DECOMPRESSION` 可用，请求 gzip/deflate 自动解压 |
-| 发送/接收 | `WinHttpSendRequest` → `WinHttpReceiveResponse` |
+| 发送/接收 | `WinHttpAddRequestHeaders`（附加头，`ADD|REPLACE`）→ `WinHttpSendRequest` → `WinHttpReceiveResponse` |
 | 状态/原因 | `WinHttpQueryHeaders(STATUS_CODE / STATUS_TEXT)`；原因缺失时用 `http_reason_from_status` 补齐 |
+| 验证器 | `WINHTTP_QUERY_CUSTOM` 按名取 `ETag` / `Last-Modified`，原样存进 `HttpResponse` |
 | 内容长度 | `WINHTTP_QUERY_CONTENT_LENGTH`，用于进度 |
 | 读取 | 8 KiB 缓冲循环 `WinHttpReadData`；每次回调 `progress(downloaded, total)` |
 | 错误 | 状态 `>=400` 抛 `HttpError` |
@@ -760,9 +908,11 @@ Windows 版的状态原因表比较完整（200/201/204/301/302/304/400/401/403/
 | `CURLOPT_PROXY` | 非空时设置 |
 | `CURLOPT_PROTOCOLS_STR` / `REDIR_PROTOCOLS_STR` | libcurl ≥ 7.85 时限制为 `http,https` |
 | `CURLOPT_ERRORBUFFER` | 捕获详细错误文本 |
+| `CURLOPT_HEADERFUNCTION` | 解析响应头：每遇到新 `HTTP/` 状态行先清空验证器（重定向只保留最后一跳），再按小写名匹配 `etag` / `last-modified` |
+| `CURLOPT_HTTPHEADER` | 附加请求头转成 `curl_slist`，`curl_easy_perform` 后 `curl_slist_free_all` |
 
 - `curl_global_init` 用 `std::call_once` 保证只执行一次；失败抛 `runtime_error`。
-- 响应状态用 `CURLINFO_RESPONSE_CODE` 获取；原因短语是简化表（200/404/429/5xx/4xx），不像 Windows 那样完整。
+- 响应状态用 `CURLINFO_RESPONSE_CODE` 获取；原因短语是简化表（200/204/304/400/404/429/5xx），不像 Windows 那样完整。
 - 进度回调异常被 `try/catch(...)` 吞掉，不允许异常穿过 libcurl 的 C 回调边界。
 - POSIX 版不把 body 流式写文件；调用方（下载）拿到完整 `std::string` 后再写盘。
 
@@ -816,41 +966,50 @@ sequenceDiagram
   participant S as TUF API
 
   C->>A: fetchapi_sync(url)
-  alt 缓存启用且命中
-    A->>K: find(url)
-    K-->>A: body
-    A->>A: cache_hits++ / verbose 打印
-    A-->>C: Json::parse(body)
-  else 未命中
-    A->>A: start_request(url)<br/>计数++，首个请求打印“查询中...”
-    A->>H: http_get(url, proxy, 30)
-    H->>S: HTTPS GET
+  A->>K: find(url)（缓存启用时）
+  alt 有缓存条目
+    K-->>A: CacheEntry{body, etag, lastModified}
+    A->>A: 组装 If-None-Match / If-Modified-Since
+  end
+  A->>A: start_request(url)<br/>计数++，首个请求记录起始时间
+  A->>H: http_get(url, proxy, 30, 回调, 条件头)
+  H->>S: HTTPS 条件 GET
+  alt 304 Not Modified 且有缓存条目
+    S-->>H: 304（可带新的验证器）
+    H-->>A: HttpResponse{status=304, etag?, lastModified?}
+    A->>A: cache_hits++；验证器轮换则更新并 dirty；verbose 打印
+    A-->>C: Json::parse(cached.body)
+  else 200
     S-->>H: 200 + body
     H-->>A: HttpResponse
     A->>A: 记录耗时；verbose 打印状态/大小/可选 JSON
-    A->>K: cache[url] = body；dirty = true
+    A->>K: cache[url] = {body, etag, lastModified}；dirty = true
     A-->>C: Json::parse(body)
   end
 ```
 
-- 缓存键是**完整 URL**（包含 query）。
-- 缓存值是**原始响应体字符串**，不是解析后的 Json；命中时会重新解析，保证与网络返回一致，也让缓存不依赖解析器版本。
+- 缓存键是**完整 URL**（包含 query）；值是 `{body, etag, lastModified}`（见 8.3）。
+- **每次查询都会发一次真实请求**：缓存条目只用来把请求变成条件 GET（`If-None-Match` / `If-Modified-Since`），服务器回 304 才复用 body。不存在「不联网直接返回旧 body」的路径。
+- 304 也计入请求数（`start_request` 在发请求前调用），并计入 span/耗时；`cache_hits()` 统计的只是「304 复用」次数。
+- 没有验证器（ETag 与 Last-Modified 都缺失）的条目、以及旧格式 `{url: body}` 条目：不发条件头，每次都是完整 200，拿到新 body 后按新格式重写。
+- 304 里若带了与本条不同的验证器（服务器轮换 ETag），会覆盖缓存并标记 dirty。
 - 空响应体不入缓存，返回 null Json。
-- 缓存命中不会调用 `start_request`，因此不计入请求数、不打印“查询中...”，但会打印 verbose 的 `#cached` 行。
-- `Json::parse` 失败会向调用方抛出；网络响应在解析前就已写入缓存（因此一个内容非 JSON 的错误页可能被缓存，直到手动清空或缓存失效；见 14 节）。
+- `Json::parse` 失败会向调用方抛出；200 响应在解析前就写入缓存，所以「200 但非 JSON」的 body 仍可能被缓存，之后每次 304 复用都会重复解析失败，直到手动清空（见 14 节）。
+- **网络错误不降级**：缓存里有 body 也不会拿来兜底，断网时查询直接失败（见 14 节）。
 
 #### 6.7.3 缓存文件
 
 | 项 | 说明 |
 | --- | --- |
 | 文件名 | `cache.json`（数据目录） |
-| 结构 | 顶层对象：`{ "<完整URL>": "<原始响应体字符串>" }` |
+| 结构 | 顶层对象：`{ "<完整URL>": { "body": "<原始响应体>", "etag": "<ETag>", "lastModified": "<Last-Modified>" } }`；两个验证器字段可缺失（服务器没给时就不写） |
+| 兼容 | 旧格式 `{ "<完整URL>": "<body>" }` 仍被读取；这类条目没有验证器，下次查询无条件重取一次并升级为新格式 |
 | 载入时机 | 第一次访问缓存时懒加载 |
 | 损坏处理 | 解析失败：清空内存缓存、标记 dirty；下次写回时覆盖 |
-| 写入时机 | 每次成功网络响应后标记 dirty；进程正常退出时 `cache_flush()` 写盘；主菜单“清空缓存”立即写 `{}` |
-| 过期策略 | **无 TTL、无 ETag/Last-Modified 校验**；只有手动清空或删除文件 |
-| 禁用 | `--no-cache` 同时禁止读和写 |
-| 统计 | 命中次数单独计数，不计入 `used N requests` |
+| 写入时机 | 每次 200 响应后（含无条件重取）标记 dirty；进程正常退出时 `cache_flush()` 写盘；主菜单“清空缓存”立即写 `{}` |
+| 过期策略 | **条件 GET 校验**：每次查询带 `If-None-Match` / `If-Modified-Since`，304 复用旧 body、200 覆盖；不需要手动清理 |
+| 禁用 | `--no-cache` 同时禁止读和写（也不发条件头） |
+| 统计 | 304 复用次数单独计数，但产生 304 的那次请求计入 `used N requests` |
 
 `cache_clear(error)` 会先 `cache_load_locked()` 再清空并立即写盘。这样即使此前从未加载过磁盘缓存，清空操作也会真正覆盖磁盘文件；写失败返回 false，主菜单打印错误。
 
@@ -858,18 +1017,18 @@ sequenceDiagram
 
 #### 6.7.4 请求计数与 `stats()`
 
-- `g_count`：真实网络请求数（缓存命中不算）。
+- `g_count`：真实网络请求数，**包含返回 304 的条件请求**。
 - `g_api_us`：所有请求耗时之和（微秒精度累加）。
 - `g_span_start` / `g_span_end`：第一个网络请求开始、最近一次请求结束；用于“span”。
-- `g_cache_hits`：缓存命中数。
+- `g_cache_hits`：其中返回 304、body 从缓存复用的次数。
 - `stats()` 输出：
   - 若 `count` 或 `hits` 非零：
-    - verbose：`used N requests, span X ms (请求累计 Y ms)，命中缓存 Z 次`
-    - 非 verbose：`总耗时: X ms`（有缓存命中时追加 `，命中缓存 Z 次`）
+    - verbose：`used N requests, span X ms (请求累计 Y ms)，缓存复用 Z 次 (304)`
+    - 非 verbose：`总耗时: X ms`（有 304 复用时追加 `，缓存复用 Z 次 (304)`）
   - 总是打印一行 70 个 `=` 的分隔线。
   - 清零全部计数器和 span。
 
-> `span` 是“首个请求开始到末个请求结束”的墙钟时间，不是进程总运行时间；如果全部命中缓存，`count=0`，不会打印耗时行（只打印分隔线）。
+> `span` 是“首个请求开始到末个请求结束”的墙钟时间，不是进程总运行时间。缓存启用时每次查询都会产生请求（可能返回 304），因此 `count` 通常大于 0；`hits > 0` 一定伴随相应的真实请求。
 
 #### 6.7.5 批量请求 `fetchall_sync`
 
@@ -885,8 +1044,8 @@ sequenceDiagram
 | 请求开始 | `#1 GET https://api.tuforums.com/...  (proxy: http://...)` |
 | 成功 | `    <- #1 200 OK  123.45 ms  4567 B` |
 | 失败（HttpError） | `    <- #1 HTTP 404 ... 请求失败 ...  12.34 ms` + 可选 body 块 |
-| 缓存命中 | `    <- #cached https://...  (4567 B)` |
-| 首次请求（非 verbose） | `查询中...` |
+| 304 复用 | `    <- #1 304 Not Modified  12.75 ms  复用缓存 32 B` |
+| 首次请求（非 verbose） | 无输出（自 v1 起不再打印 `查询中...`，避免脚本调用时污染 stderr） |
 | 普通日志 | `log()` 只在 verbose 输出 |
 
 `--dump-json` 的 body 块：
@@ -1793,6 +1952,55 @@ b. 返回主菜单
 
 ---
 
+### 6.15 `jsoncli.*` —— 非交互 JSON 接口
+
+**职责**：把“读一个 JSON 请求 → 执行一个操作 → 写一个 JSON 响应”的流程封装起来，供 `--json` / `--request` / `--request-file` 使用。协议、操作清单与例子见 [2.4](#24-json-模式非交互--供其他程序调用)。
+
+**关键符号**：
+
+| 符号 | 位置 | 说明 |
+| --- | --- | --- |
+| `run_json_cli` | [`jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | 读请求（参数/文件/stdin）→ 解析 → 逐个执行 → 输出响应 → 返回退出码 |
+| `dispatch` | [`jsoncli.cpp:997`](../src/jsoncli.cpp#L997) | `op` 名字串分发；未知操作返回 `unknown_op` |
+| `op_names` | [`jsoncli.cpp:981`](../src/jsoncli.cpp#L981) | 操作清单的唯一来源（`version` 的 `ops[]` 也用它） |
+| `response_for` | [`jsoncli.cpp:1021`](../src/jsoncli.cpp#L1021) | 包装 `ok`/`op`/`id`/`elapsed_ms` 与 `result`/`error` |
+| `emit_error` | [`jsoncli.cpp:1069`](../src/jsoncli.cpp#L1069) | 输出协议级错误文档并返回 2 |
+| `class Request` | [`jsoncli.cpp:148`](../src/jsoncli.cpp#L148) | 带别名的参数读取：`text`/`number`/`integer`/`flag`/`pick`/`present` |
+| `class OpError` | [`jsoncli.cpp:43`](../src/jsoncli.cpp#L43) | 错误码 + `extra`（合并进 `error` 对象） |
+| `class StdoutRedirect` | [`jsoncli.cpp:58`](../src/jsoncli.cpp#L58) | 作用域内把 `std::cout` 的缓冲区换成 `std::cerr` 的 |
+| `api_call` | [`jsoncli.cpp:221`](../src/jsoncli.cpp#L221) | 把 API 层异常统一转成 `api` 错误码；模板化以支持非 `Json` 返回值 |
+| `resolve_player` | [`jsoncli.cpp:449`](../src/jsoncli.cpp#L449) | `id` / 名字 / Discord → 唯一玩家（多义时报 `ambiguous` + 候选） |
+| `parse_counts` / `parse_fixed` / `parse_judgements` | [`jsoncli.cpp:305`](../src/jsoncli.cpp#L305) / [`324`](../src/jsoncli.cpp#L324) / [`340`](../src/jsoncli.cpp#L340) | 判定数量的三种输入形式 |
+| `target_window_ok` | [`jsoncli.cpp:828`](../src/jsoncli.cpp#L828) | 搜索前预检目标精度窗口，把“不可达”变成结果而非错误 |
+| 12 个 `op_*` | [`op_version`](../src/jsoncli.cpp#L407) 至 [`op_xacc_model`](../src/jsoncli.cpp#L945) | 每个操作一个函数，返回 `result` JSON |
+
+**执行流程**：
+
+```text
+run_json_cli(options)
+  → 取请求文本：--request（"-" 表示 stdin）> --request-file > stdin
+  → 去 BOM；空 → emit_error(invalid_request) 退出 2
+  → Json::parse 失败 → emit_error(invalid_json) 退出 2
+  → StdoutRedirect（此后 stdout 只留给响应）
+      → 顶层数组：逐个 response_for(item)
+      → 顶层对象：response_for(doc)
+      → 其他类型：emit_error(invalid_request) 退出 2
+      → cache_flush()（异常忽略）
+  → 输出 output.dump(pretty ? indent : -1)
+  → 全部 ok ? 0 : 1
+```
+
+**设计要点**：
+
+- **stdout 只放响应**：`-v` 日志、缓存提示、警告来自 `std::cout`（`api.cpp`），`StdoutRedirect` 把它们整体挪到 stderr，因此 JSON 模式不需要改动任何业务模块。
+- **错误分层**：`OpError` 表示“操作失败但协议正常”（响应仍打印，退出码 1）；`emit_error` 表示“请求文档本身不可用”（退出码 2）。
+- **别名宽松**：`Request::pick` 按别名列表取第一个存在的键，因此 `levelId`/`level_id`、`xacc`/`accuracy`/`acc` 都能用，文档只需介绍主名。
+- **复制而非复用**：`fetch_level`（[`jsoncli.cpp:251`](../src/jsoncli.cpp#L251)）是 `menus.cpp::fetch_level_by_id` 的副本，`pp.calc` 的参数校验也与 `handle_pp_calc` 平行。这样交互模式的提示文案与流程完全不受 JSON 模式影响，但两处逻辑需要同步维护（见 14.10）。
+- **机器可读优先**：`status_code` / `solver_code` 与中文 `status` / `solver` 并存；判定计数总是补齐全部键；未找到时 `counts` 为 `null` 而不是全 0。
+- **不做交互**：JSON 模式从不调用 `choose_player`、`search_level`、`handle_*`、`details`、`print_*`、`stats()`，也不需要终端宽度。
+
+---
+
 ## 7. 功能与调用链
 
 本节从用户操作出发，串起跨模块的实际调用链。所有网络调用最终都落到 `api::fetchapi_sync` → `http::http_get`。
@@ -2167,15 +2375,19 @@ flowchart TD
 stateDiagram-v2
   [*] --> Empty
   Empty --> Loaded: 首次 get_once / 读取 cache.json
-  Loaded --> Hit: URL 命中
-  Loaded --> Miss: URL 未命中
-  Miss --> Loaded: 网络成功 + 内存写入（dirty）
-  Hit --> Loaded: 返回解析结果
+  Loaded --> HaveEntry: 同一 URL 已有条目
+  Loaded --> NoEntry: 无条目
+  HaveEntry --> Revalidated: 条件 GET（If-None-Match / If-Modified-Since）
+  Revalidated --> Loaded: 304 复用 body（hits++）；验证器轮换则 dirty
+  Revalidated --> Loaded: 200 覆盖 body + 验证器（dirty）
+  NoEntry --> Loaded: 200 写入 body + 验证器（dirty）
   Loaded --> Persisted: cache_flush()
   Loaded --> Persisted: cache_clear() 写入空对象
   Persisted --> Loaded: 继续使用内存
   Loaded --> Empty: 禁用缓存
 ```
+
+> 没有「不联网直接返回」的状态：每次查询都发请求，缓存只决定要不要带条件头、以及 304 时复用哪个 body。网络错误直接从 `Revalidated` 抛出，不会回到 `Loaded` 复用旧 body。
 
 **清空缓存调用链**：
 
@@ -2190,6 +2402,42 @@ main 菜单 5
       → 成功："缓存已清空"
       → 失败："缓存清空失败: <error>"
 ```
+
+---
+
+### 7.9 JSON 模式调用链
+
+```text
+tuftools --json [--request ... | --request-file ...]
+  → main::run
+      argparse 解析 → set_proxies/set_verbose/set_cache_enabled
+      → run_json_cli(options)
+          → 读请求文本（参数 / 文件 / stdin），去 BOM
+          → Json::parse（失败：emit_error invalid_json，退出 2）
+          → StdoutRedirect {
+              顶层对象：response_for(doc)
+                → dispatch(doc, op)
+                    → op_xxx(Request)
+                        → api_call(...) → fetchapi_sync / get_player / get_all_ranks / ...
+                        → 计算（TUFScoreCalculator / xacc_reverse_search / xacc_equivalents）
+                → 包成 {ok, op, id?, elapsed_ms, result|error}
+              顶层数组：对每个元素重复上面过程，输出数组
+              cache_flush()
+            }
+          → stdout << dump()，退出码 0/1
+```
+
+与交互链路的差别：
+
+| 环节 | 交互模式 | JSON 模式 |
+| --- | --- | --- |
+| 启动横幅 / 菜单 | 打印并等待输入 | 不打印、不等待 |
+| 选择玩家 | `choose_player` 列出候选并要求输入序号 | `player.details` 命中多个时报 `ambiguous` + 候选列表 |
+| 谱面搜索 | `search_level` 分页 + 手动输入页码 | `level.search` 用 `limit`/`offset` 由调用方翻页 |
+| 输出 | 人类可读文本（表格、对齐） | JSON（保留 `*_text` 展示字符串） |
+| 进度/日志 | stdout | stderr |
+| 结束 | `q` 或 EOF | 写完一个响应就退出 |
+| 排名变化 / 下载 / 转换 | 支持 | 不支持（见 2.4 末尾） |
 
 ---
 
@@ -2270,15 +2518,18 @@ main 菜单 5
 | 项 | 说明 |
 | --- | --- |
 | 位置 | `data_dir()/cache.json` |
-| 结构 | `{ "<完整URL>": "<响应体字符串>" }` |
+| 结构 | `{ "<完整URL>": { "body": "<响应体字符串>", "etag": "<ETag>", "lastModified": "<Last-Modified>" } }`；`etag` / `lastModified` 缺省表示服务器未提供该验证器 |
 | 编码 | JSON，2 空格缩进；响应体作为字符串转义 |
 | 内容 | 只缓存非错误响应（`status < 400`）且 body 非空；空 body 不缓存 |
 | 生命周期 | 懒加载 → 内存 map → 退出/清空时写回 |
-| 失效 | 无自动失效；只能手动删除/清空 |
+| 旧格式 | `{ "<完整URL>": "<body>" }` 仍可读取；无验证器，下次查询无条件重取一次并升级为新格式 |
+| 失效 | 条件 GET 校验：每次查询带 `If-None-Match` / `If-Modified-Since`，304 复用、200 覆盖；无需手动删除 |
 | 损坏 | 读取失败时清空内存并标记 dirty，下次写入覆盖 |
-| 禁用 | `--no-cache` 时不读不写 |
+| 禁用 | `--no-cache` 时不读不写（也不发条件头） |
 
-> 缓存写入发生在 JSON 解析**之前**：如果服务器返回 200 但 body 不是合法 JSON（例如错误页），该 body 也可能被缓存；下一次命中会在 `Json::parse` 处抛异常。需要手动清空缓存。
+> 缓存写入发生在 JSON 解析**之前**：如果服务器返回 200 但 body 不是合法 JSON（例如错误页），该 body 也可能被缓存；之后每次 304 复用都会在 `Json::parse` 处抛异常。需要手动清空缓存。
+>
+> 断网时不会回退到缓存里的旧 body：网络错误照常抛出（这正是「宁可失败也不显示陈旧数据」的取舍）。
 
 ### 8.4 Legacy 迁移矩阵
 
@@ -2296,7 +2547,7 @@ main 菜单 5
 
 - **配置**：XACC 模型在每次操作前加载一次；`settings.json` 由单线程 UI 读写，没有文件锁。
 - **难度库**：更新时整体覆盖 `difficulties` section；API 返回空/异常时 `update()` 会写入空数组（因为 `raw` 非数组时 `result` 为空），可能清空本地难度库。使用时注意。
-- **缓存**：缓存键是 URL，不包含代理、请求头、时间；切换 `--proxy` 或 API 版本后仍可能命中旧响应。
+- **缓存**：缓存键是 URL，不含代理、请求头、时间；条目里的验证器来自上一次 200 的服务器，因此换代理或 API 版本后，若服务器对同一 URL 仍回 304，就会继续复用旧 body（ETag 由服务器决定，正确实现下不会错配）。
 - **转换预设**：最多 5 条；读取时只取前 5 条；保存时写入当前列表。
 - **没有 schema 迁移框架**：除了 legacy 文件迁移和 XACC 的 `schemaVersion=2`，其他 section 没有版本字段；未来格式变化需要手写兼容逻辑。
 
@@ -2304,7 +2555,7 @@ main 菜单 5
 
 ## 9. HTTP API 清单
 
-所有请求都是 `GET`，无认证头，User-Agent 为 `tuftools/1.0 (cpp)`；默认超时 30 秒（下载 60 秒）；响应体完整读入内存。
+所有请求都是 `GET`，无认证头，User-Agent 为 `tuftools/1.0 (cpp)`；默认超时 30 秒（下载 60 秒）；响应体完整读入内存。经由 `api::fetchapi_sync` 的请求在有缓存条目时会附加 `If-None-Match` / `If-Modified-Since`，服务器可能返回 `304 Not Modified`（无 body）。
 
 | # | 方法与路径 | 用途 | 调用点 | 主要参数 | 备注 |
 | ---: | --- | --- | --- | --- | --- |
@@ -2756,12 +3007,12 @@ half = min(max(half_exact, slack), cap)
 #2 GET https://api.tuforums.com/v3/players/12345
     <- #2 200 OK  38.12 ms  5678 B
 ...
-used 9 requests, span 512.34 ms (请求累计 498.76 ms)，命中缓存 0 次
+used 9 requests, span 512.34 ms (请求累计 498.76 ms)，缓存复用 2 次 (304)
 ======================================================================
 ```
 
-- `#n` 是真实网络请求序号；缓存命中显示 `#cached`。
-- 首次请求在非 verbose 下只打印 `查询中...`。
+- `#n` 是真实网络请求序号；304 复用同样占用一个序号（行内显示 `304 Not Modified` 与 `复用缓存 N B`）。
+- 首次请求在非 verbose 下不打印任何进度行（`查询中...` 已移除）；`-v` 仍会打印每个请求。
 - `fetchall_sync` 的日志顺序可能交错，但每行完整。
 - XACC 求解器 trace（`verbose_enabled()` 时才构建字符串）会打印：模式、物量、固定/自由、目标窗口、gcd、base、求解器选择、分支顺序、上界更新、剪枝统计、最终 count。
 
@@ -2787,10 +3038,10 @@ used 9 requests, span 512.34 ms (请求累计 498.76 ms)，命中缓存 0 次
 ### 12.3 统计与缓存
 
 - 每个玩家查询/PP 计算结束会打印 `stats()`；其中：
-  - `used N requests` 只统计真实网络请求；
+  - `used N requests` 统计真实网络请求，**包含返回 304 的条件请求**；
   - `span` 是首个请求开始到末个请求结束；
-  - `命中缓存 N 次` 单独统计。
-- 全部命中缓存时 `count=0`、`hits>0`：非 verbose 下打印 `总耗时: 0.00 ms，命中缓存 N 次`，verbose 下打印 `used 0 requests, span 0.00 ms ...`，随后打印分隔线；`span` 没有真实请求可测，因此为 0。
+  - `缓存复用 N 次 (304)` 单独统计 body 从缓存复用的次数。
+- 缓存启用时，重复查询同样会发一次条件请求：304 只省下 body 的传输与解析，不省往返。因此 `count=0` 只在本次运行完全没有请求时出现。
 
 ### 12.4 使用桩服务器/镜像
 
@@ -2800,6 +3051,7 @@ TUFTOOLS_API_BASE=http://127.0.0.1:8080 ./build/tuftools -v
 
 - 该变量在进程启动时读取一次；值不要以 `/` 结尾（代码直接拼接 `/v3/...`，结尾斜杠会产生 `//`，多数服务器可容忍，但不保证）。
 - 可以用简单 HTTP 服务返回固定 JSON 来复现解析/排版问题；下载 CDN 也会指向该 base（路径 `/cdn/...`）。
+- 验证缓存行为时，stub 应按 `If-None-Match` / `If-Modified-Since` 决定返回 304 还是 200，并在 200 时带上 `ETag` / `Last-Modified`；不处理这两个请求头的 stub 永远回 200，效果等同于每次全量重取。
 
 ### 12.5 隔离数据目录
 
@@ -2816,8 +3068,9 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 ./build/tuftools --no-cache
 ```
 
-- 不读不写 `cache.json`；每次查询都走网络。
+- 不读不写 `cache.json`；也不发 `If-None-Match` / `If-Modified-Since`，每次查询都是完整 200。
 - 主菜单 5 只提示“已启用 --no-cache，本次运行不会读写缓存”，不会清空磁盘上的旧缓存。
+- 想强制刷新某个 URL 时，`--no-cache` 或清空缓存都能达到目的，但正常情况下条件 GET 已经会拿到最新数据。
 
 ### 12.7 常用排障表
 
@@ -2827,12 +3080,16 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 | `未找到玩家` 但 ID 确定存在 | ID 查询异常被当作“未找到” | 开 `-v` 看真实 HTTP 错误 |
 | 排名全是 `?` | 分数为 0、leaderboard 失败、字段缺失 | `-v` 看请求；确认玩家分数 |
 | 通关表难度显示 ID | 内嵌难度名缺失且难度表请求失败 | 检查网络/缓存；清空缓存重试 |
+| 断网/连不上 API | 缓存只做校验，不做离线兜底 | 恢复网络或配置 `--proxy`/`TUFTOOLS_API_BASE`；`-v` 能看到 WinHTTP/curl 的原始错误 |
 | 排位分无法计算 | 本地通关记录重算与 `rankedScore` 差 > 0.05 | 通常是记录不完整/隐藏；无法绕过 |
 | XACC 反推“预算耗尽” | 物量大/权重步长多/预算小 | 增大 `maxDpCells`/`maxNodes`/`maxSeconds`，或改用分支定界 |
 | XACC 结果 `exact=false` | 该物量下无法精确到输入小数位 | 输入更多/更少小数位，或接受最接近值 |
 | 启动即报难度下载失败 | 构造 `TUFScoreCalculator` 时强制加载难度库 | 恢复网络/代理，或手工准备 `settings.difficulties` |
 | `缓存清空失败` | 数据目录不可写 | 检查权限/`TUFTOOLS_DATA_DIR` |
 | 直接编译报 `version.hpp` 缺失 | 使用了 `direct`/`mingw` 后端 | 改用 CMake 后端或手动生成/包含版本头 |
+| JSON 模式没有任何输出、进程像卡住 | 只给了 `--json`，程序在读 stdin | 用管道喂请求，或改用 `--request` / `--request-file` |
+| JSON 模式 stdout 混入日志行 | 有代码绕过 `std::cout` 直接写 fd 1（如 `printf`/`WriteFile`） | JSON 模式的 stdout 只重定向了 `std::cout`；把这类输出改走 `std::cout` 或 stderr |
+| JSON 模式 `error.code = api` 且消息含 `WinHTTP error 12185` | 没有出网能力（代理/防火墙/DNS） | 配置 `--proxy`、换网络，或在 CI 里用桩服务器 + `TUFTOOLS_API_BASE` |
 
 ---
 
@@ -2903,6 +3160,20 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 ---
 
+### 13.8 新增一个 JSON 操作
+
+1. 在 `op_names()`（[`jsoncli.cpp:981`](../src/jsoncli.cpp#L981)）里登记名字，`version` 的 `ops[]` 会自动带上它。
+2. 写一个 `Json op_xxx(const Request& req)`：
+   - 参数用 `req.text` / `req.number` / `req.integer` / `req.flag` / `req.pick` 读取（带别名、带 Python 风格报错），必填缺失时调用 `req.missing("字段")`；
+   - 参数校验失败用 `fail_input("消息")`；需要自定义错误码时 `throw OpError("code", "消息")`，`error.extra` 里的字段会合并进 `error` 对象；
+   - 访问网络统一走 `api_call("标签", [&]{ return ...; })`，自动变成 `api` 错误码。
+3. 在 `dispatch()`（[`jsoncli.cpp:997`](../src/jsoncli.cpp#L997)）加一行 `if (op == "xxx") return op_xxx(req);`。
+4. 不要在 op 内直接写 stdout（虽然会被 `StdoutRedirect` 挪到 stderr，但别依赖），也不要调用交互函数（`read_trimmed`、`choose_player`、`search_level` 等）。
+5. 涉及 XACC 时复用 `load_model()`；目标解析用 `xacc_parse_target`，并用 `target_window_ok` 把“不可达”当结果而不是错误。
+6. 同步更新 2.4 的操作表、README 的说明，以及本节的符号表（6.15）。
+
+---
+
 ## 14. 已知限制与风险
 
 > 以下条目按“对使用/维护的影响”排序。部分是有意设计，部分是移植遗留问题。
@@ -2930,10 +3201,12 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
    - `get_player` 的 ID 也未编码。
    - 影响：部分玩家名/ID 搜索失败；Discord 用户名中的特殊字符同理。
 
-5. **缓存无失效、无 TTL、可能缓存错误体**
-   - 同一 URL 永久命中，直到手动清空；API 数据更新后仍显示旧值。
-   - 200 但非 JSON 的响应在解析前写入缓存，后续命中会持续解析失败。
-   - 切换代理/API base 后 URL 可能相同，仍命中旧缓存。
+5. **缓存只做条件校验，依赖服务器正确实现**
+   - 缓存不再无限期返回旧 body：每次查询都会用 `If-None-Match` / `If-Modified-Since` 询问服务器。但若服务器对未变的 ETag 错误地回 200、或对已变的内容仍回 304，客户端无法察觉。
+   - 服务器不提供 `ETag` / `Last-Modified` 时，条目没有验证器，每次查询都是完整 200（等同于无缓存，只是多了一次缓存读写）。
+   - 200 但非 JSON 的响应在解析前写入缓存，之后每次 304 复用都会持续解析失败，需要手动清空。
+   - **断网不可用**：缓存不会作为离线兜底，网络错误直接抛出。
+   - 缓存键不含代理/API base：换代理后 URL 相同仍会带旧验证器去问。
 
 6. **没有重试/限流/退避**
    - 429/5xx 直接失败；排名请求降级为 `?`，其他可能冒泡。
@@ -3009,10 +3282,10 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 | README 描述 | 实际代码 |
 | --- | --- |
-| `tuftools [--proxy VAR] [--verbose]` | 还有 `--dump-json`、`--no-cache` |
+| `tuftools [--proxy VAR] [--verbose]` | 还有 `--dump-json`、`--no-cache`、`--json`/`-j`、`--request`、`--request-file`、`--json-indent` |
 | `./build.sh direct` / `build.ps1 mingw` 可用 | 当前缺少 `version.hpp`，直接构建失败 |
 | 数据文件在 exe 同目录，提到 `costs.json`/`difficulties.json` | 当前主数据是 `settings.json` + `cache.json`；旧文件仅迁移源 |
-| 目录表只列主要模块 | 还有 `xacc_model.*`、`xacc_solver.*`、`weights.cpp` |
+| 目录表只列主要模块 | 还有 `jsoncli.*`、`xacc_model.*`、`xacc_solver.*`、`weights.cpp` |
 | `menus.cpp` 只对应 `ppcalc.py`/`acccalc.py` | 还包含谱面查询、下载、转换预设 |
 
 ### 14.6 Legacy `xacc.json` 的 schema 风险
@@ -3046,6 +3319,16 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 ---
 
+### 14.10 JSON 模式的范围与重复代码
+
+- **覆盖范围**：只有 12 个无关交互的操作（见 2.4）。谱面下载/转换、排名变化 top-20 重算、判定成本编辑、`stats()` 汇总都没有 JSON 入口；需要这些能力时仍要跑交互模式，或者直接改 `settings.json`。
+- **重复实现**：`jsoncli.cpp` 为了实现“无交互”复制了 `menus.cpp` 里的一小部分逻辑 —— `fetch_level`（对应 `fetch_level_by_id`）、`pp.calc` 的参数校验与 `build_level_data` 调用顺序（对应 `handle_pp_calc`）、反推的显示格式（对应 `acc_run2`）。修改交互模式里这些行为时，记得同步 JSON 模式，否则两条路径会给出不同结果。
+- **协议版本**：`version` 返回的 `protocol` 目前固定为 `1`，字段只增不改；新增字段属于兼容变更，重命名/删除字段才需要升版本。
+- **stdout 边界**：只重定向了 `std::cout`。任何绕过 `iostream` 直接写文件描述符 1 的代码（当前没有）都会污染响应。
+- **缓存**：JSON 模式与交互模式共用 `cache.json`，因此 `--no-cache`、`cache.clear`、304 复用计数等行为完全一致。
+
+---
+
 ## 15. 源码索引
 
 > 行号基于 commit `969546d`。链接使用仓库相对路径；在 GitHub/支持锚点的 Markdown 查看器中可直接跳转。
@@ -3054,8 +3337,9 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 | 符号 | 文件:行 | 说明 |
 | --- | --- | --- |
-| `run` | [`src/main.cpp:15`](../src/main.cpp#L15) | CLI + 主循环 |
-| `main` | [`src/main.cpp:103`](../src/main.cpp#L103) | 顶层异常处理 |
+| `run` | [`src/main.cpp:16`](../src/main.cpp#L16) | CLI + 主循环 |
+| `main` | [`src/main.cpp:136`](../src/main.cpp#L136) | 顶层异常处理 |
+| `run_json_cli` | [`src/jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | JSON 模式入口（见 15.8） |
 | `setup_console_utf8` | [`src/console.hpp:23`](../src/console.hpp#L23) | 控制台 UTF-8 |
 | `terminal_width` | [`src/console.hpp:34`](../src/console.hpp#L34) | 终端宽度 |
 | `InputClosed` | [`src/console.hpp:73`](../src/console.hpp#L73) | EOF 异常 |
@@ -3080,14 +3364,14 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 | `settings_read` / `settings_write` | [`src/apppaths.cpp:241`](../src/apppaths.cpp#L241) / [`248`](../src/apppaths.cpp#L248) | settings 读写 |
 | `load_settings_root` | [`src/apppaths.cpp:67`](../src/apppaths.cpp#L67) | 根对象 + legacy 迁移 |
 | `user_data_dir` | [`src/apppaths.cpp:154`](../src/apppaths.cpp#L154) | 用户数据目录 |
-| `http_get`（Windows） | [`src/http.cpp:84`](../src/http.cpp#L84) | WinHTTP 实现 |
-| `http_get`（POSIX） | [`src/http.cpp:247`](../src/http.cpp#L247) | libcurl 实现 |
-| `HttpError` | [`src/http.hpp:19`](../src/http.hpp#L19) | HTTP 错误 |
-| `get_once` | [`src/api.cpp:171`](../src/api.cpp#L171) | 缓存 + 网络 + 解析 |
-| `fetchapi_sync` | [`src/api.cpp:284`](../src/api.cpp#L284) | 单请求入口 |
-| `fetchall_sync` | [`src/api.cpp:286`](../src/api.cpp#L286) | 并发请求 |
-| `cache_clear` / `cache_flush` | [`src/api.cpp:259`](../src/api.cpp#L259) / [`272`](../src/api.cpp#L272) | 缓存操作 |
-| `stats` | [`src/api.cpp:307`](../src/api.cpp#L307) | 统计输出 |
+| `http_get`（Windows） | [`src/http.cpp:110`](../src/http.cpp#L110) | WinHTTP 实现 |
+| `http_get`（POSIX） | [`src/http.cpp:340`](../src/http.cpp#L340) | libcurl 实现 |
+| `HttpError` | [`src/http.hpp:29`](../src/http.hpp#L29) | HTTP 错误 |
+| `get_once` | [`src/api.cpp:209`](../src/api.cpp#L209) | 条件请求 + 缓存复用 + 解析 |
+| `fetchapi_sync` | [`src/api.cpp:361`](../src/api.cpp#L361) | 单请求入口 |
+| `fetchall_sync` | [`src/api.cpp:363`](../src/api.cpp#L363) | 并发请求 |
+| `cache_clear` / `cache_flush` | [`src/api.cpp:336`](../src/api.cpp#L336) / [`349`](../src/api.cpp#L349) | 缓存操作 |
+| `stats` | [`src/api.cpp:384`](../src/api.cpp#L384) | 统计输出 |
 | `BASE_URL` | [`src/api.cpp:24`](../src/api.cpp#L24) | API 根地址覆盖 |
 
 ### 15.3 玩家 / 排名 / 通关记录
@@ -3191,6 +3475,39 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 ---
 
+### 15.8 JSON 接口
+
+> 行号基于 `src/jsoncli.cpp`（约 1155 行）。完整协议见 2.4，模块说明见 6.15。
+
+| 符号 | 文件:行 | 说明 |
+| --- | --- | --- |
+| `JsonCliOptions` | [`src/jsoncli.hpp:14`](../src/jsoncli.hpp#L14) | 请求来源与缩进选项 |
+| `run_json_cli` | [`src/jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | JSON 模式入口 |
+| `emit_error` | [`src/jsoncli.cpp:1069`](../src/jsoncli.cpp#L1069) | 协议级错误文档（退出码 2） |
+| `strip_utf8_bom` / `read_stream` | [`src/jsoncli.cpp:1081`](../src/jsoncli.cpp#L1081) / [`1088`](../src/jsoncli.cpp#L1088) | 读取请求文本 |
+| `dispatch` | [`src/jsoncli.cpp:997`](../src/jsoncli.cpp#L997) | 操作分发 |
+| `op_names` / `ops_array` | [`src/jsoncli.cpp:981`](../src/jsoncli.cpp#L981) / [`401`](../src/jsoncli.cpp#L401) | 操作清单 |
+| `response_for` | [`src/jsoncli.cpp:1021`](../src/jsoncli.cpp#L1021) | 响应封装 |
+| `OpError` | [`src/jsoncli.cpp:43`](../src/jsoncli.cpp#L43) | 操作级错误（code + extra） |
+| `StdoutRedirect` | [`src/jsoncli.cpp:58`](../src/jsoncli.cpp#L58) | stdout → stderr 重定向 |
+| `Request` | [`src/jsoncli.cpp:148`](../src/jsoncli.cpp#L148) | 带别名的参数读取 |
+| `api_call` | [`src/jsoncli.cpp:221`](../src/jsoncli.cpp#L221) | API 异常 → `api` 错误码 |
+| `difficulty_error_code` | [`src/jsoncli.cpp:232`](../src/jsoncli.cpp#L232) | `未知难度` → `unknown_difficulty` |
+| `rank_json` / `ranks_json` | [`src/jsoncli.cpp:237`](../src/jsoncli.cpp#L237) / [`243`](../src/jsoncli.cpp#L243) | 排名值转 JSON（`?` → `null`） |
+| `fetch_level` | [`src/jsoncli.cpp:251`](../src/jsoncli.cpp#L251) | 按 ID 取谱面（非交互版） |
+| `load_model` | [`src/jsoncli.cpp:259`](../src/jsoncli.cpp#L259) | 加载 XACC 配置 |
+| `status_code` / `solver_code` | [`src/jsoncli.cpp:281`](../src/jsoncli.cpp#L281) / [`293`](../src/jsoncli.cpp#L293) | 机器可读状态/求解器名 |
+| `parse_counts` / `parse_fixed` / `parse_judgements` | [`src/jsoncli.cpp:305`](../src/jsoncli.cpp#L305) / [`324`](../src/jsoncli.cpp#L324) / [`340`](../src/jsoncli.cpp#L340) | 判定数量输入 |
+| `target_text_of` | [`src/jsoncli.cpp:356`](../src/jsoncli.cpp#L356) | 去掉 `%` 与空白 |
+| `fixed_json` / `counts_json` / `passes_json` | [`src/jsoncli.cpp:367`](../src/jsoncli.cpp#L367) / [`373`](../src/jsoncli.cpp#L373) / [`382`](../src/jsoncli.cpp#L382) | 输出格式化 |
+| `resolve_player` | [`src/jsoncli.cpp:449`](../src/jsoncli.cpp#L449) | id/名字/Discord → 唯一玩家 |
+| `level_sort_keys` / `normalize_level_sort` | [`src/jsoncli.cpp:576`](../src/jsoncli.cpp#L576) / [`582`](../src/jsoncli.cpp#L582) | 排序参数归一化 |
+| `parse_reverse_input` | [`src/jsoncli.cpp:784`](../src/jsoncli.cpp#L784) | 反推参数解析 |
+| `target_window_ok` | [`src/jsoncli.cpp:828`](../src/jsoncli.cpp#L828) | 目标窗口预检 |
+| `op_version` … `op_xacc_model` | [`src/jsoncli.cpp:407`](../src/jsoncli.cpp#L407) … [`945`](../src/jsoncli.cpp#L945) | 12 个操作 |
+
+---
+
 ## 16. 术语表
 
 | 术语 | 含义 |
@@ -3220,7 +3537,7 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 | **DP** | 动态规划；此处指按自由音符层数、归一化损失格点转移的精确算法。 |
 | **B&B** | 分支定界；DFS + 区间/同余/成本剪枝。 |
 | **legacy map DP** | 旧版以 `std::map<loss, state>` 实现的近似 DP。 |
-| **响应缓存** | 按完整 URL 保存原始响应体的 `cache.json`；无 TTL。 |
+| **响应缓存** | 按完整 URL 保存响应体与验证器的 `cache.json`；每次查询用条件 GET 校验（304 复用 / 200 更新）。 |
 | **data dir** | `settings.json` / `cache.json` 所在目录；见 8.1。 |
 | **legacy 文件** | `xacc.json`、`difficulties.json`、`transform_presets.json`、`costs.json`、`weights.json`；启动时自动退休为 `.v1.bak`。 |
 
@@ -3276,7 +3593,7 @@ sequenceDiagram
 | 文件 | 生成者 | 消费者 | 关键点 |
 | --- | --- | --- | --- |
 | `settings.json` | `settings_write`（难度库、XACC、预设、legacy 迁移） | `settings_read` | 顶层对象；section 独立；非原子写 |
-| `cache.json` | `api.cpp` | `api.cpp` | URL → 响应体；无 TTL；可清空 |
+| `cache.json` | `api.cpp` | `api.cpp` | URL → {body, etag, lastModified}；条件 GET 校验；可清空 |
 | `*.v1.bak` | `apppaths.cpp::retire_legacy_file` | 人工 | 旧数据备份，不再读取 |
 | `build/generated/version.hpp` | CMake | `main.cpp` | 版本/构建时间宏 |
 | `build/tuftools[.exe]` | CMake/build 脚本 | 用户 | 最终产物 |

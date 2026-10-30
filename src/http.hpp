@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace tuf {
 
@@ -14,7 +15,16 @@ struct HttpResponse {
     int status = 0;
     std::string reason;
     std::string body;
+    // Response validators, kept verbatim (ETag retains its quotes) so they can be
+    // replayed as If-None-Match / If-Modified-Since on the next request.  Either
+    // may be empty when the server does not supply it.
+    std::string etag;
+    std::string last_modified;
 };
+
+// Extra request headers, sent in order.  Used by the response cache to issue
+// conditional GETs; values are passed through untouched.
+using HttpHeaders = std::vector<std::pair<std::string, std::string>>;
 
 class HttpError : public std::runtime_error {
 public:
@@ -33,7 +43,8 @@ private:
 using HttpProgressCallback = std::function<void(std::uint64_t downloaded, std::uint64_t total)>;
 
 HttpResponse http_get(const std::string& url, const std::string& proxy = std::string(), int timeout_sec = 30,
-                      const HttpProgressCallback& progress = HttpProgressCallback());
+                      const HttpProgressCallback& progress = HttpProgressCallback(),
+                      const HttpHeaders& request_headers = HttpHeaders());
 
 std::string http_reason_from_status(int status);
 

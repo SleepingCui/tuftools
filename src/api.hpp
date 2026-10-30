@@ -16,14 +16,18 @@ bool verbose_enabled();
 void set_verbose_json(bool enabled);
 std::string active_proxy();
 
-// Response cache.  Every GET goes through here, so a second lookup of the same
-// player or difficulty list costs no request at all.  Entries live in
-// cache.json inside the data directory; a corrupt or unreadable file is simply
-// ignored (the cache degrades to a no-op, it never breaks a lookup).
+// Response cache.  Every GET goes through here.  An entry stores the response
+// body plus the ETag / Last-Modified the server sent, and the next lookup of the
+// same URL is issued as a conditional GET: 304 reuses the stored body, 200
+// replaces it.  That means a lookup is always fresh but never free of a round
+// trip.  Entries live in cache.json inside the data directory; a corrupt or
+// unreadable file is simply ignored (the cache degrades to a no-op, it never
+// breaks a lookup).
 void set_cache_enabled(bool enabled);
 bool cache_enabled();
 
-// Number of requests served from the cache instead of the network.
+// Number of lookups whose body was reused from the cache after a 304.  The round
+// trip that produced the 304 still counts as a request.
 long long cache_hits();
 
 // Empties the cache both in memory and on disk.  Returns false when the file
