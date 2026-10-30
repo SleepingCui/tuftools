@@ -60,13 +60,24 @@ JSON 模式（非交互，供脚本/其他工具调用）：
 # 从标准输入读一个 JSON 请求，向标准输出写一个 JSON 响应（推荐，最不容易被 shell 转义坑到）
 '{"op":"xacc.calc","counts":{"perfect":1000,"failMiss":5}}' | .\build\tuftools.exe -j
 
+# 玩家详情（排名 + 通关记录）
+'{"op":"player.details","id":"9988"}' | .\build\tuftools.exe -j
+
+# PP 计算并顺带预览排位分/排名变化
+'{"op":"pp.calc","baseScore":2500,"tilecount":800,"xacc":98.5,"rankChange":true,"id":"9988"}' | .\build\tuftools.exe -j
+
+# 下载谱面（原样 ZIP / 转换后 ZIP / V2 .adofai）
+'{"op":"level.download","id":"8387","mode":"transform","preset":"low_effects","directory":"C:/tmp"}' | .\build\tuftools.exe -j
+
 # 从文件读请求，并缩进输出
 .\build\tuftools.exe --request-file req.json --json-indent 2
 ```
 
 > **PowerShell 5.1 注意**：`--request '{...}'` 里的一对单引号是 PowerShell 自己的，里面的双引号会在传给进程前被吃掉（`{"op":"x"}` 变成 `{op:x}`），JSON 就解析失败了。要么改用管道 / `--request-file`，要么把每个双引号写成 `\"`：`--request '{\"op\":\"player.get\",\"id\":\"9988\"}'`。PowerShell 7.3+ 调整了原生参数传递规则，不再有这个问题。
 
-请求是 `{"op": "...", ...}` 对象（或对象数组，表示批量）；响应是 `{"ok": true, "op": "...", "result": {...}}`，失败时是 `{"ok": false, "error": {"code": "...", "message": "..."}}`。退出码 `0` 表示全部成功，`1` 表示至少一个操作失败，`2` 表示请求文档本身无法处理。stdout 上只有响应 JSON，进度/日志都走 stderr。完整协议见 [docs/doc.md](docs/doc.md) 第 2.4 节。
+请求是 `{"op": "...", ...}` 对象（或对象数组，表示批量）；响应是 `{"ok": true, "op": "...", "result": {...}}`，失败时是 `{"ok": false, "error": {"code": "...", "message": "..."}}`。退出码 `0` 表示全部成功，`1` 表示至少一个操作失败，`2` 表示请求文档本身无法处理。stdout 上只有响应 JSON，进度/日志都走 stderr。
+
+交互模式的菜单能力都有对应的 JSON 操作（共 17 个）：玩家搜索/详情/通关记录分页、谱面搜索/详情/CDN 能力探测/原样与转换下载、PP 计算（可附带排位变化预览）、XACC 正算/反推/等效组合/配置读写、缓存清空。完整协议与参数说明见 [docs/doc.md](docs/doc.md) 第 2.4 节。
 
 
 
@@ -76,6 +87,7 @@ JSON 模式（非交互，供脚本/其他工具调用）：
 | --- | --- | --- |
 | [src/main.cpp](src/main.cpp) | `main.py` | 命令行参数（argparse）与主菜单 |
 | [src/jsoncli.cpp](src/jsoncli.cpp) / [src/jsoncli.hpp](src/jsoncli.hpp) | — | 非交互 JSON 模式：请求/响应协议、操作分发、stdout 隔离 |
+| [src/chartdl.cpp](src/chartdl.cpp) / [src/chartdl.hpp](src/chartdl.hpp) | — | 供 JSON 模式使用的谱面下载/转换实现（非交互） |
 | [src/menus.cpp](src/menus.cpp) / [src/menus.hpp](src/menus.hpp) | `ppcalc.py`, `acccalc.py` | PP 计算器与 XACC 计算器菜单 |
 | [src/info.cpp](src/info.cpp) / [src/info.hpp](src/info.hpp) | `info.py` | 玩家搜索、详情、排名查询、通关谱面列表 |
 | [src/tools.cpp](src/tools.cpp) / [src/tools.hpp](src/tools.hpp) | `tools/*.py` | 分数计算器、难度库管理、XACC 反解 |

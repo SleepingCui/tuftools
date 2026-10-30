@@ -74,7 +74,7 @@
 建议按以下顺序阅读：
 
 1. [`src/main.cpp`](../src/main.cpp) —— CLI 与主菜单。
-2. [`src/jsoncli.cpp`](../src/jsoncli.cpp) —— 非交互 JSON 模式（`--json`）：请求/响应协议与 12 个操作。
+2. [`src/jsoncli.cpp`](../src/jsoncli.cpp) —— 非交互 JSON 模式（`--json`）：请求/响应协议与 17 个操作。
 3. [`src/menus.cpp`](../src/menus.cpp) —— 四个业务菜单与下载/转换流程。
 4. [`src/info.cpp`](../src/info.cpp) —— 玩家、排名、通关记录、表格排版。
 5. [`src/tools.cpp`](../src/tools.cpp) + [`src/weights.cpp`](../src/weights.cpp) —— PP 计算与固定判定权重。
@@ -216,13 +216,18 @@ tuftools --json [--json-indent N] [--request JSON | --request-file PATH] [--no-c
 | `player.search` | `query`/`name`/`q`，或 `discord`（自动加 `@` 前缀） | `query`、`by`（`name`/`discord`）、`count`、`results[]`（API 原始数组） |
 | `player.get` | `id`/`playerId`/`player_id` | `player`（API 原始对象） |
 | `player.details` | `id`，或 `query`/`name`，或 `discord`；`includeRanks`、`includePasses`（默认 `true`）、`passLimit`（默认 100）、`passesFetchCap`（默认 64） | `matched_by`、`player`、`ranks`（7 项分数的全局/国家排名，`null` 表示未知）、`passes`（`total`/`count`/`truncated`/`rows[]`） |
+| `player.passes` | `id`，或 `query`/`name`，或 `discord`；`offset`（默认 0）、`limit`（默认 100，`0` 表示全部）、`passesFetchCap`（默认 64） | `matched_by`、`player{id,name,country,totalPasses}`、`total`、`offset`、`limit`、`count`、`hasMore`、`rows[]` |
 | `level.search` | `query`（全数字时按谱面 ID 查）；`sort`（`CLEARS`/`DOWNLOADS`/`LIKES`/`FAVORITES`/`BPM`/`TILECOUNT`/`DURATION`/`BASESCORE`/`ID`，可加 `_DESC`/`_ASC`，默认 `CLEARS_DESC`）、`order`（`asc`/`desc`）、`limit`（默认 10，上限 100）、`offset` | `query`、`sort`、`by_id`、`limit`、`offset`、`count`、`hasMore`、`results[]` |
 | `level.get` | `id`/`levelId`/`level_id` | `id`、`level`（API 原始详情对象） |
-| `pp.calc` | `levelId`（优先级最高），或 `difficulty`/`baseScore` 之一 + `tilecount`/`tiles`；`marathon`、`xacc`/`accuracy`（必填）、`misses`（默认 0）、`speed`（默认 1.0）、`noHoldTap` | `calculate_score` 的全部字段（`accuracy`、`accuracy_pct`、`score`、`raw_score`、`base_score`、`base_source`、`multiplier`、`speed_mod`、`empty_tap_mod`、`default_setting_mod`、`tilecount`、`xacc_curve_*`）+ `level_id`、`level` |
+| `level.cdn` | `id`/`levelId`/`level_id` | `level{id,song,artist,creator,difficulty,fileId,dlLink,tilecount,baseScore,ppBaseScore}`、`can_download_original`、`can_transform`、`can_download_v2`、`metadata`、`transform_options`、`builtin_presets[{index,key,name,params}]`、`custom_presets[]`，以及取 CDN 信息失败时的 `cdn_error` / 读预设失败时的 `presets_error` |
+| `level.download` | `id`/`levelId`；`mode`（`original` / `transform` / `v2`，默认 `original`）；`transform` 时三选一：`preset`（序号 1-5、`low_effects` 这类 key、或中文预设名）、`customPreset`（`settings.json` 里的自定义预设名）、`params`（`keepEvents`/`dropEvents`/`dropFilters`/`baseCameraZoom`/`constantBackgroundColor`/`removeForegroundFlash`）；落盘位置用 `output`（文件或已存在的目录），或 `directory` + `filename` | `level`、`mode`、`url`、`path`、`bytes`、`suffixed`（重名时自动加 `_1`）、`expect_zip`、`params`（`transform` 时）；失败时 `error` 附带 `url`/`path` |
+| `pp.calc` | `levelId`（优先级最高），或 `difficulty`/`baseScore` 之一 + `tilecount`/`tiles`；`marathon`、`xacc`/`accuracy`（必填）、`misses`（默认 0）、`speed`（默认 1.0）、`noHoldTap`、`rankChange`（默认 `false`，开启后附带排位分预览，此时还需要 `id`/`query`/`discord` 定位玩家） | `calculate_score` 的全部字段（`accuracy`、`accuracy_pct`、`score`、`raw_score`、`base_score`、`base_source`、`multiplier`、`speed_mod`、`empty_tap_mod`、`default_setting_mod`、`tilecount`、`xacc_curve_*`）+ `level_id`、`level`，开启 `rankChange` 时再加 `rank_change` |
+| `rank.preview` | `id`，或 `query`/`name`，或 `discord`；`score`（`calculatedScore`/`pp`/`ppScore` 别名）；`levelId`（可选，表示这个成绩会替换该谱面原有的最好成绩） | `player{id,name,country}`、`level_id`、`candidate_score`、`ranked_score{old,new,added}`、`global{old,new,delta}`、`country{old,new,delta}`、`matched_by`（`delta` 为负表示名次前进） |
 | `xacc.calc` | `counts`（对象）或 `judgements`（数组，顺序 = 当前模式的判定键）；`xperfect` | `xperfect`、`total`、`weighted`、`score_units`、`score_scale`、`xacc`、`xacc_text`、`counts`（补齐全部键） |
 | `xacc.reverse` | `total`/`tilecount`/`tiles`、`xacc`/`accuracy`/`acc`（必填）、`fixed`（只锁写出的键）、`xperfect`、`solver`、`maxNodes`、`maxDpCells`、`maxSeconds` | `found`、`status`、`status_code`、`message`、`total`、`target`、`decimals`、`fixed`、`counts`（未找到时为 `null`）、`score_units`、`distance_units`、`cost_units`、`xacc`/`xacc_text`、`exact`、`optimal`、`solver`/`solver_code`、`nodes`、`pruned`、`incumbent_updates`、`states`、`cells`、`elapsed_ms`、`note` |
 | `xacc.equivalents` | 同 `xacc.reverse`，另加 `maxSolutions`（默认 64，上限 4096） | 上述字段 + `count`、`truncated`、`solutions[]`（每个元素是一份完整判定计数） |
 | `xacc.model` | — | `score_scale`、`cost_scale`、`max_nodes`、`max_dp_cells`、`max_seconds`、`order[]`、`weights{}`、`costs{}`、`solvers[{code,name}]` |
+| `xacc.config` | `costs{}`（判定难度系数）、`maxNodes`、`maxDpCells`、`maxSeconds`（≤ 86400）、`costScale`（改精度时按比例缩放已有系数）、`save`（默认 `true`；`false` 只试算不落盘） | `xacc.model` 的全部字段 + `modified`、`saved`、`rounded` |
 
 补充约定：
 
@@ -231,6 +236,9 @@ tuftools --json [--json-indent N] [--request JSON | --request-file PATH] [--no-c
 - `xacc` 目标可以带 `%`（`"99.28%"`）；小数位数由输入字符串决定（`"99.28"` = 2 位）。反推结果 `exact=false` 表示该物量下到不了这个精度，此时给出最接近的可达值。
 - `solver` 接受 `automatic`/`auto`/`自动`、`exact_dp`/`dp`/`exact`/`精确`、`branch_and_bound`/`bb`/`分支定界`、`legacy_map_dp`/`legacy`/`map`/`旧版`，也接受数字 `0`（自动）与 `1..4`（按 `xacc.model.solvers` 顺序）。
 - `status_code` 取值：`ok`、`invalid_input`、`invalid_config`、`out_of_range`、`unreachable`、`budget_exhausted`。其中 `unreachable`（该精度下不存在可达区间）是**正常答案**：`ok:true`、`found:false`、退出码 0。
+- 判定权重是**固定游戏规则**：`xacc.config` 不接受 `weights`，读权重用 `xacc.model`；可改的只有 `costs`（难度系数）、三个预算 `maxNodes`/`maxDpCells`/`maxSeconds` 与 `costScale`（改精度会按比例缩放已有系数，`rounded` 表示有取整）。
+- `level.download` 的 `transform` 模式要求 `preset` / `customPreset` / `params` **恰好给一个**；`preset` 可以用序号、`low_effects` 这类 key 或中文名。
+- `rank.preview` 的排名对比用排行榜接口取“成绩换成候选值之后”的名次；`delta` 为负表示名次前进（12 → 2 是 `-10`）。
 
 #### 退出码与 stdout 纯净性
 
@@ -265,9 +273,37 @@ printf '%s' '{"op":"xacc.calc","counts":{"perfect":1000,"lPerfect":10,"failMiss"
 ]
 ```
 
-#### 未覆盖的功能
+更多示例：
 
-JSON 模式只暴露“查询 + 计算”这类无副作用或幂等的操作。以下仍只能在交互模式里做：谱面下载与格式转换（`download_level_chart` 及转换预设）、排位分变化的 top-20 重算（`calculate_rank_changes`，需要选一个谱面替换成绩）、主菜单的 `stats()` 汇总输出、判定成本的交互式编辑（可直接改 `settings.json`，或用 `xacc.model` 读取当前值）。
+```bash
+# 通关记录分页（分页由调用方控制，服务端没有 offset 语义）
+./build/tuftools --request '{"op":"player.passes","id":"9988","offset":100,"limit":100}'
+
+# 排位分预览：把成绩换成 3305 分后，加权排位分与全球/国家名次会变成多少
+./build/tuftools --request '{"op":"rank.preview","id":"9988","score":3305,"levelId":"8387"}'
+
+# 下载转换后的谱面（内置预设；也可以给 params 自定义参数）
+./build/tuftools --request '{"op":"level.download","id":"8387","mode":"transform","preset":"low_effects","directory":"/tmp"}'
+
+# 改判定难度系数并写回 settings.json
+./build/tuftools --request '{"op":"xacc.config","costs":{"early":52},"maxSeconds":3}'
+```
+
+#### 覆盖范围与副作用
+
+交互模式四个菜单的能力都有对应操作：玩家查询（搜索/详情/通关记录分页）、谱面查询（搜索/详情/CDN 能力探测/原样与转换下载/V2 下载）、PP 计算（含排位变化预览）、XACC 计算（正算/反推/等效组合/配置读写）、缓存清空。
+
+有副作用、需要注意的操作：
+
+- `level.download` 会**写文件**（可重名自动加 `_1`），失败时 `error` 里带 `url`/`path`。
+- `xacc.config` 默认写 `settings.json`（`save:false` 可只试算）；判定权重是固定规则，传 `weights` 会被拒绝。
+- `cache.clear` 与 `--no-cache` 组合时只返回 `skipped`。
+
+仍未暴露的能力（只能在交互模式里做，或直接改 `settings.json`）：
+
+- 主菜单结尾的 `stats()` 汇总（总耗时 / 请求数）——JSON 模式用 `elapsed_ms` 表达单次耗时。
+- **新建/编辑**自定义转换预设：`level.download` 能读取并使用已保存的 `customPreset`，也能用 `params` 临时指定任意参数，但不会把新预设写进 `settings.json`（写入函数 `save_custom_presets` 目前只有交互菜单调用）。
+- 交互式逐项编辑判定成本时的人工核对流程（JSON 这边是一次提交、整体校验）。
 
 ---
 
@@ -287,6 +323,7 @@ tuftools/
 ├── src/
 │   ├── main.cpp                # CLI + 主菜单
 │   ├── jsoncli.cpp/.hpp        # 非交互 JSON 模式（--json 请求/响应、操作分发）
+│   ├── chartdl.cpp/.hpp        # 供 JSON 模式使用的谱面下载/转换（非交互）
 │   ├── menus.cpp/.hpp          # PP / XACC / 谱面查询与下载菜单
 │   ├── info.cpp/.hpp           # 玩家、排名、通关记录、表格排版
 │   ├── tools.cpp/.hpp          # CostsMan / DiffMan / TUFScoreCalculator / XACC 兼容层
@@ -315,9 +352,10 @@ tuftools/
 
 | 文件 | 行数（约） | 职责 | 主要调用者 |
 | --- | ---: | --- | --- |
-| [`src/main.cpp`](../src/main.cpp) | 115 | 参数解析、全局配置、主循环、顶层异常处理 | 操作系统 |
-| [`src/jsoncli.cpp`](../src/jsoncli.cpp) / [`.hpp`](../src/jsoncli.hpp) | 1155 / 29 | JSON 模式：参数校验、12 个操作、响应封装、stdout 隔离 | `main` |
-| [`src/menus.cpp`](../src/menus.cpp) / [`.hpp`](../src/menus.hpp) | 1444 / 20 | 谱面搜索下载、PP 计算、排名变化、XACC 菜单 | `main` |
+| [`src/main.cpp`](../src/main.cpp) | 148 | 参数解析、全局配置、JSON 模式分派、主循环、顶层异常处理 | 操作系统 |
+| [`src/jsoncli.cpp`](../src/jsoncli.cpp) / [`.hpp`](../src/jsoncli.hpp) | 1669 / 29 | JSON 模式：参数校验、17 个操作、响应封装、stdout 隔离 | `main` |
+| [`src/chartdl.cpp`](../src/chartdl.cpp) / [`.hpp`](../src/chartdl.hpp) | 275 / 67 | 非交互谱面下载/转换：CDN 信息、转换预设、URL 拼装、落盘 | `jsoncli` |
+| [`src/menus.cpp`](../src/menus.cpp) / [`.hpp`](../src/menus.hpp) | 1446 / 31 | 谱面搜索下载、PP 计算、排名变化、XACC 菜单；导出 `ranked_score_after_candidate` 供 JSON 模式复用 | `main` |
 | [`src/info.cpp`](../src/info.cpp) / [`.hpp`](../src/info.hpp) | 735 / 87 | 玩家搜索/详情/排名/通关记录/表格/分页 | `main`、`menus` |
 | [`src/tools.cpp`](../src/tools.cpp) / [`.hpp`](../src/tools.hpp) | 441 / 89 | 难度库、PP 计算、XACC 兼容 API | `menus`、`xacc_model`、`weights` |
 | [`src/weights.cpp`](../src/weights.cpp) | 46 | 正常/XPerfect 判定键顺序与固定权重 | `tools`、`menus`、`xacc_model`、`xacc_solver` |
@@ -521,7 +559,8 @@ flowchart TB
 | 源文件 | 直接包含的内部头文件 |
 | --- | --- |
 | `main.cpp` | `api.hpp`、`console.hpp`、`info.hpp`、`jsoncli.hpp`、`menus.hpp`、`version.hpp` |
-| `jsoncli.cpp` | `jsoncli.hpp`、`api.hpp`、`console.hpp`、`info.hpp`、`numfmt.hpp`、`pyjson.hpp`、`tools.hpp`、`version.hpp`、`xacc_model.hpp`、`xacc_solver.hpp` |
+| `jsoncli.cpp` | `jsoncli.hpp`、`api.hpp`、`chartdl.hpp`、`console.hpp`、`info.hpp`、`menus.hpp`、`numfmt.hpp`、`pyjson.hpp`、`tools.hpp`、`version.hpp`、`xacc_model.hpp`、`xacc_solver.hpp` |
+| `chartdl.cpp` | `chartdl.hpp`、`api.hpp`、`apppaths.hpp`、`console.hpp`、`http.hpp`、`pyjson.hpp` |
 | `menus.cpp` | `menus.hpp`、`api.hpp`、`apppaths.hpp`、`console.hpp`、`http.hpp`、`info.hpp`、`pyjson.hpp`、`numfmt.hpp`、`tools.hpp`、`xacc_solver.hpp` |
 | `info.cpp` | `info.hpp`、`api.hpp`、`console.hpp`、`numfmt.hpp` |
 | `tools.cpp` | `tools.hpp`、`api.hpp`、`apppaths.hpp`、`console.hpp`、`numfmt.hpp`、`xacc_model.hpp`、`xacc_solver.hpp` |
@@ -549,28 +588,33 @@ sequenceDiagram
     M-->>OS: 返回 2
   end
   M->>A: set_proxies / set_verbose / set_verbose_json / set_cache_enabled
-  M->>C: 打印横幅与主菜单
-  loop 直到 q / EOF
-    M->>C: read_trimmed("\n> ")
-    alt 1
-      M->>M: handle_player_lookup()
-    else 2
-      M->>M: handle_level_lookup()
-    else 3
-      M->>M: handle_pp_calc()
-    else 4
-      M->>M: handle_acc_calc()
-    else 5
-      M->>A: cache_clear(error)
-    else q
-      M->>M: break
-    else 其他
-      M->>C: 无效选择
+  alt JSON 模式（--json / --request / --request-file）
+    M->>M: run_json_cli(options)（见 6.15）
+    M-->>OS: 返回其退出码（0 全部成功 / 1 有操作失败 / 2 请求文档无法处理）
+  else 交互模式
+    M->>C: 打印横幅与主菜单
+    loop 直到 q / EOF
+      M->>C: read_trimmed("\n> ")
+      alt 1
+        M->>M: handle_player_lookup()
+      else 2
+        M->>M: handle_level_lookup()
+      else 3
+        M->>M: handle_pp_calc()
+      else 4
+        M->>M: handle_acc_calc()
+      else 5
+        M->>A: cache_clear(error)
+      else q
+        M->>M: break
+      else 其他
+        M->>C: 无效选择
+      end
+      note over M: 业务异常在此捕获并打印，InputClosed 继续上抛
     end
-    note over M: 业务异常在此捕获并打印，InputClosed 继续上抛
+    M->>A: cache_flush()
+    M-->>OS: 返回 0
   end
-  M->>A: cache_flush()
-  M-->>OS: 返回 0
 ```
 
 关键点：
@@ -608,7 +652,7 @@ sequenceDiagram
 | --- | --- | --- |
 | `run(int, char**)` | [`main.cpp:16`](../src/main.cpp#L16) | 参数解析 → 配置 →（JSON 模式则 `run_json_cli` 后直接返回）→ 主循环 → `cache_flush()` |
 | `main(int, char**)` | [`main.cpp:136`](../src/main.cpp#L136) | `setup_console_utf8()` + 顶层异常处理 |
-| `tuf::run_json_cli` | [`jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | JSON 模式的全部工作，见 6.15 |
+| `tuf::run_json_cli` | [`jsoncli.cpp:1611`](../src/jsoncli.cpp#L1611) | JSON 模式的全部工作，见 6.15 |
 
 **参数解析**：使用 vendored argparse v3.1，`argparse::default_arguments::help` 只自动添加 `-h/--help`。`--proxy` 没有默认值，用 `present<std::string>` 判断是否提供；其余布尔参数使用 `.default_value(false).implicit_value(true)`。
 
@@ -1832,7 +1876,7 @@ loss_max   = base_total - (target_units - half)
 | 函数 | 位置 | 说明 |
 | --- | --- | --- |
 | `calculate_rank_changes(score, selected_level_id)` | [`menus.cpp:746`](../src/menus.cpp#L746) | 计算排位分与排名变化 |
-| `ranked_score_after_candidate(...)` | [`menus.cpp:670`](../src/menus.cpp#L670) | 用本地通关记录重算 top-20 加权排位分 |
+| `ranked_score_after_candidate(...)` | [`menus.cpp:674`](../src/menus.cpp#L674) | 用本地通关记录重算 top-20 加权排位分（`menus.hpp` 导出，JSON 模式也用它） |
 | `handle_pp_calc()` | [`menus.cpp:851`](../src/menus.cpp#L851) | PP 计算主流程 |
 
 **`handle_pp_calc` 流程**：
@@ -1960,19 +2004,24 @@ b. 返回主菜单
 
 | 符号 | 位置 | 说明 |
 | --- | --- | --- |
-| `run_json_cli` | [`jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | 读请求（参数/文件/stdin）→ 解析 → 逐个执行 → 输出响应 → 返回退出码 |
-| `dispatch` | [`jsoncli.cpp:997`](../src/jsoncli.cpp#L997) | `op` 名字串分发；未知操作返回 `unknown_op` |
-| `op_names` | [`jsoncli.cpp:981`](../src/jsoncli.cpp#L981) | 操作清单的唯一来源（`version` 的 `ops[]` 也用它） |
-| `response_for` | [`jsoncli.cpp:1021`](../src/jsoncli.cpp#L1021) | 包装 `ok`/`op`/`id`/`elapsed_ms` 与 `result`/`error` |
-| `emit_error` | [`jsoncli.cpp:1069`](../src/jsoncli.cpp#L1069) | 输出协议级错误文档并返回 2 |
-| `class Request` | [`jsoncli.cpp:148`](../src/jsoncli.cpp#L148) | 带别名的参数读取：`text`/`number`/`integer`/`flag`/`pick`/`present` |
-| `class OpError` | [`jsoncli.cpp:43`](../src/jsoncli.cpp#L43) | 错误码 + `extra`（合并进 `error` 对象） |
-| `class StdoutRedirect` | [`jsoncli.cpp:58`](../src/jsoncli.cpp#L58) | 作用域内把 `std::cout` 的缓冲区换成 `std::cerr` 的 |
-| `api_call` | [`jsoncli.cpp:221`](../src/jsoncli.cpp#L221) | 把 API 层异常统一转成 `api` 错误码；模板化以支持非 `Json` 返回值 |
-| `resolve_player` | [`jsoncli.cpp:449`](../src/jsoncli.cpp#L449) | `id` / 名字 / Discord → 唯一玩家（多义时报 `ambiguous` + 候选） |
-| `parse_counts` / `parse_fixed` / `parse_judgements` | [`jsoncli.cpp:305`](../src/jsoncli.cpp#L305) / [`324`](../src/jsoncli.cpp#L324) / [`340`](../src/jsoncli.cpp#L340) | 判定数量的三种输入形式 |
-| `target_window_ok` | [`jsoncli.cpp:828`](../src/jsoncli.cpp#L828) | 搜索前预检目标精度窗口，把“不可达”变成结果而非错误 |
-| 12 个 `op_*` | [`op_version`](../src/jsoncli.cpp#L407) 至 [`op_xacc_model`](../src/jsoncli.cpp#L945) | 每个操作一个函数，返回 `result` JSON |
+| `run_json_cli` | [`jsoncli.cpp:1611`](../src/jsoncli.cpp#L1611) | 读请求（参数/文件/stdin）→ 解析 → 逐个执行 → 输出响应 → 返回退出码 |
+| `dispatch` | [`jsoncli.cpp:1494`](../src/jsoncli.cpp#L1494) | `op` 名字串分发；未知操作返回 `unknown_op` |
+| `op_names` | [`jsoncli.cpp:1473`](../src/jsoncli.cpp#L1473) | 操作清单的唯一来源（`version` 的 `ops[]` 也用它） |
+| `response_for` | [`jsoncli.cpp:1523`](../src/jsoncli.cpp#L1523) | 包装 `ok`/`op`/`id`/`elapsed_ms` 与 `result`/`error` |
+| `emit_error` | [`jsoncli.cpp:1571`](../src/jsoncli.cpp#L1571) | 输出协议级错误文档并返回 2 |
+| `request_parse_error` | [`jsoncli.cpp:1597`](../src/jsoncli.cpp#L1597) | 为“引号被 shell 吃掉”的请求补一句提示 |
+| `class Request` | [`jsoncli.cpp:152`](../src/jsoncli.cpp#L152) | 带别名的参数读取：`text`/`number`/`integer`/`flag`/`pick`/`present` |
+| `class OpError` | [`jsoncli.cpp:46`](../src/jsoncli.cpp#L46) | 错误码 + `extra`（合并进 `error` 对象） |
+| `class StdoutRedirect` | [`jsoncli.cpp:61`](../src/jsoncli.cpp#L61) | 作用域内把 `std::cout` 的缓冲区换成 `std::cerr` 的 |
+| `api_call` | [`jsoncli.cpp:225`](../src/jsoncli.cpp#L225) | 把 API 层异常统一转成 `api` 错误码；模板化以支持非 `Json` 返回值 |
+| `resolve_player` | [`jsoncli.cpp:453`](../src/jsoncli.cpp#L453) | `id` / 名字 / Discord → 唯一玩家（多义时报 `ambiguous` + 候选） |
+| `parse_counts` / `parse_fixed` / `parse_judgements` | [`jsoncli.cpp:309`](../src/jsoncli.cpp#L309) / [`328`](../src/jsoncli.cpp#L328) / [`344`](../src/jsoncli.cpp#L344) | 判定数量的三种输入形式 |
+| `target_window_ok` | [`jsoncli.cpp:839`](../src/jsoncli.cpp#L839) | 搜索前预检目标精度窗口，把“不可达”变成结果而非错误 |
+| `model_json` | [`jsoncli.cpp:956`](../src/jsoncli.cpp#L956) | 把 `XaccModel` 转成 `xacc.model` / `xacc.config` 的结果对象 |
+| `rank_change_json` | [`jsoncli.cpp:999`](../src/jsoncli.cpp#L999) | 排位分 top-20 重算 + 排名前后对比（`rank.preview` 与 `pp.calc.rankChange` 共用） |
+| `level_summary` / `cdn_flags` | [`jsoncli.cpp:1140`](../src/jsoncli.cpp#L1140) / [`1161`](../src/jsoncli.cpp#L1161) | 谱面摘要；由 `cdnData` 推导能否转换 / 能否下载 V2 |
+| `builtin_presets_json` / `transform_param_text` | [`jsoncli.cpp:1177`](../src/jsoncli.cpp#L1177) / [`1203`](../src/jsoncli.cpp#L1203) | 内置转换预设清单；把 `params` 的值统一成字符串 |
+| 17 个 `op_*` | [`op_version`](../src/jsoncli.cpp#L411) 至 [`op_xacc_config`](../src/jsoncli.cpp#L1384) | 每个操作一个函数，返回 `result` JSON |
 
 **执行流程**：
 
@@ -1995,9 +2044,33 @@ run_json_cli(options)
 - **stdout 只放响应**：`-v` 日志、缓存提示、警告来自 `std::cout`（`api.cpp`），`StdoutRedirect` 把它们整体挪到 stderr，因此 JSON 模式不需要改动任何业务模块。
 - **错误分层**：`OpError` 表示“操作失败但协议正常”（响应仍打印，退出码 1）；`emit_error` 表示“请求文档本身不可用”（退出码 2）。
 - **别名宽松**：`Request::pick` 按别名列表取第一个存在的键，因此 `levelId`/`level_id`、`xacc`/`accuracy`/`acc` 都能用，文档只需介绍主名。
-- **复制而非复用**：`fetch_level`（[`jsoncli.cpp:251`](../src/jsoncli.cpp#L251)）是 `menus.cpp::fetch_level_by_id` 的副本，`pp.calc` 的参数校验也与 `handle_pp_calc` 平行。这样交互模式的提示文案与流程完全不受 JSON 模式影响，但两处逻辑需要同步维护（见 14.10）。
+- **复制而非复用**：`fetch_level`（[`jsoncli.cpp:255`](../src/jsoncli.cpp#L255)）是 `menus.cpp::fetch_level_by_id` 的副本，`pp.calc` 的参数校验也与 `handle_pp_calc` 平行；下载/转换走独立的 `chartdl.cpp`（`menus.cpp` 的交互式下载流程仍自成一套）；`rank.preview` 只有“算加权分”这一步复用了 `menus.cpp` 导出的 `ranked_score_after_candidate`。这样交互模式的提示文案与流程完全不受 JSON 模式影响，但两处逻辑需要同步维护（见 14.10）。
 - **机器可读优先**：`status_code` / `solver_code` 与中文 `status` / `solver` 并存；判定计数总是补齐全部键；未找到时 `counts` 为 `null` 而不是全 0。
 - **不做交互**：JSON 模式从不调用 `choose_player`、`search_level`、`handle_*`、`details`、`print_*`、`stats()`，也不需要终端宽度。
+
+### 6.16 `chartdl.*` —— 非交互谱面下载/转换
+
+**职责**：为 JSON 模式的 `level.cdn` / `level.download` 提供与终端无关的下载实现：拼转换 URL、读`cdnData`、读写自定义转换预设、校验参数、落盘。**不打印任何东西**，也不询问路径。
+
+**关键符号**：
+
+| 符号 | 位置 | 说明 |
+| --- | --- | --- |
+| `struct TransformPreset` | [`chartdl.hpp:22`](../src/chartdl.hpp#L22) | `{key, name, params}`，`params` 是有序的 `key=value` 列表 |
+| `builtin_transform_presets` | [`chartdl.cpp:86`](../src/chartdl.cpp#L86) | 5 个内置预设，与交互模式的 1–5 项完全一致 |
+| `transform_zip_url` | [`chartdl.cpp:101`](../src/chartdl.cpp#L101) | `/cdn/levels/<fileId>/transform?format=zip&<k>=<v>`，值经 `url_quote` |
+| `level_v2_url` | [`chartdl.cpp:107`](../src/chartdl.cpp#L107) | `/cdn/levels/<fileId>/level-v2.adofai` |
+| `safe_level_filename` | [`chartdl.cpp:111`](../src/chartdl.cpp#L111) | `TUF_Level_<id><suffix>`，替换 Windows 非法字符 |
+| `fetch_cdn_data` | [`chartdl.cpp:122`](../src/chartdl.cpp#L122) | `/v2/database/levels/<id>/cdnData`（`metadata` + `transformOptions`） |
+| `load_custom_presets` / `save_custom_presets` | [`chartdl.cpp:126`](../src/chartdl.cpp#L126) / [`149`](../src/chartdl.cpp#L149) | `settings.json` 的 `transformPresets` 段（最多 5 个） |
+| `append_transform_param` | [`chartdl.cpp:170`](../src/chartdl.cpp#L170) | 逐项校验并规范化：逗号列表、相机缩放 0.1–10、颜色 `#RRGGBB[AA]`、开关值 |
+| `download_to_file` | [`chartdl.cpp:223`](../src/chartdl.cpp#L223) | 建目录 → 重名加 `_1/_2` → `http_get` → 校验 ZIP 魔数 → 写文件 → `ChartDownload{ok,path,bytes,suffixed,error}` |
+
+**要点**：
+
+- 与 `menus.cpp` 的交互式下载（`save_download` / `download_level_chart`）是**刻意的两份实现**：交互版带进度条、询问保存路径、支持会话内自定义预设；JSON 版没有终端、路径由参数给出。两者共享同一套 URL 形式与预设定义，改动时要一起改（见 14.10）。
+- `download_to_file` 把失败原因放在返回值里而不是抛异常，由 `jsoncli.cpp` 决定错误码（`download`，并附带 `url` / `path`）。
+- 转换参数名与交互模式完全一致：`keepEvents`、`dropEvents`、`dropFilters`、`baseCameraZoom`、`constantBackgroundColor`、`removeForegroundFlash`。
 
 ---
 
@@ -2420,6 +2493,8 @@ tuftools --json [--request ... | --request-file ...]
                     → op_xxx(Request)
                         → api_call(...) → fetchapi_sync / get_player / get_all_ranks / ...
                         → 计算（TUFScoreCalculator / xacc_reverse_search / xacc_equivalents）
+                        → 下载（level.download → chartdl::download_to_file → http_get）
+                        → 排名变化（rank.preview / pp.calc.rankChange → ranked_score_after_candidate + fetch_ranks）
                 → 包成 {ok, op, id?, elapsed_ms, result|error}
               顶层数组：对每个元素重复上面过程，输出数组
               cache_flush()
@@ -2437,7 +2512,9 @@ tuftools --json [--request ... | --request-file ...]
 | 输出 | 人类可读文本（表格、对齐） | JSON（保留 `*_text` 展示字符串） |
 | 进度/日志 | stdout | stderr |
 | 结束 | `q` 或 EOF | 写完一个响应就退出 |
-| 排名变化 / 下载 / 转换 | 支持 | 不支持（见 2.4 末尾） |
+| 排名变化 | `calculate_rank_changes` 现场选玩家 + 选谱面 | `rank.preview`（或 `pp.calc` 的 `rankChange`），谱面用 `levelId` 显式给出 |
+| 下载 / 转换 | `download_level_chart`（询问路径、进度条、会话内自定义预设） | `level.download`（`mode` + `preset`/`params`，路径由 `output`/`directory` 给出） |
+| 判定成本编辑 | `acc_edit_units` / `acc_edit_solver_params` 逐项输入 | `xacc.config` 一次提交 + `save` 开关 |
 
 ---
 
@@ -2464,7 +2541,7 @@ tuftools --json [--request ... | --request-file ...]
 | --- | --- | --- | --- | --- |
 | `xacc` | object | `xacc_model_save` | `xacc_model_load` | schemaVersion 2 的整数模型 |
 | `difficulties` | array | `DifficultyManager::update` | `DifficultyManager::load` / `file_exists` | `{name, baseScore}` |
-| `transformPresets` | array | `save_transform_presets` | `load_transform_presets` | 最多 5 条 `{name, params}` |
+| `transformPresets` | array | `save_transform_presets`（交互）/ `save_custom_presets`（JSON） | `load_transform_presets` / `load_custom_presets` | 最多 5 条 `{name, params}` |
 | `legacyCosts` | object | `costs_save`（目前无调用）/ legacy 迁移 | `costs_load` | 旧判定成本；XACC 迁移会读取 |
 | 其他 | 任意 | 第三方/手工 | — | 保留不认识的 section |
 
@@ -3162,15 +3239,16 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 ### 13.8 新增一个 JSON 操作
 
-1. 在 `op_names()`（[`jsoncli.cpp:981`](../src/jsoncli.cpp#L981)）里登记名字，`version` 的 `ops[]` 会自动带上它。
+1. 在 `op_names()`（[`jsoncli.cpp:1473`](../src/jsoncli.cpp#L1473)）里登记名字，`version` 的 `ops[]` 会自动带上它。
 2. 写一个 `Json op_xxx(const Request& req)`：
    - 参数用 `req.text` / `req.number` / `req.integer` / `req.flag` / `req.pick` 读取（带别名、带 Python 风格报错），必填缺失时调用 `req.missing("字段")`；
    - 参数校验失败用 `fail_input("消息")`；需要自定义错误码时 `throw OpError("code", "消息")`，`error.extra` 里的字段会合并进 `error` 对象；
    - 访问网络统一走 `api_call("标签", [&]{ return ...; })`，自动变成 `api` 错误码。
-3. 在 `dispatch()`（[`jsoncli.cpp:997`](../src/jsoncli.cpp#L997)）加一行 `if (op == "xxx") return op_xxx(req);`。
+3. 在 `dispatch()`（[`jsoncli.cpp:1494`](../src/jsoncli.cpp#L1494)）加一行 `if (op == "xxx") return op_xxx(req);`。
 4. 不要在 op 内直接写 stdout（虽然会被 `StdoutRedirect` 挪到 stderr，但别依赖），也不要调用交互函数（`read_trimmed`、`choose_player`、`search_level` 等）。
-5. 涉及 XACC 时复用 `load_model()`；目标解析用 `xacc_parse_target`，并用 `target_window_ok` 把“不可达”当结果而不是错误。
-6. 同步更新 2.4 的操作表、README 的说明，以及本节的符号表（6.15）。
+5. 涉及 XACC 时复用 `load_model()`；目标解析用 `xacc_parse_target`，并用 `target_window_ok` 把“不可达”当结果而不是错误；要改配置就复用 `model_json()` 输出并走 `xacc_model_save`。
+6. 需要下载/转换时复用 `chartdl.hpp`（`transform_zip_url` / `download_to_file` 等），不要在 op 里自己拼 HTTP。
+7. 同步更新 2.4 的操作表、README 的说明，以及本节的符号表（6.15、6.16）。
 
 ---
 
@@ -3321,8 +3399,9 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 ### 14.10 JSON 模式的范围与重复代码
 
-- **覆盖范围**：只有 12 个无关交互的操作（见 2.4）。谱面下载/转换、排名变化 top-20 重算、判定成本编辑、`stats()` 汇总都没有 JSON 入口；需要这些能力时仍要跑交互模式，或者直接改 `settings.json`。
-- **重复实现**：`jsoncli.cpp` 为了实现“无交互”复制了 `menus.cpp` 里的一小部分逻辑 —— `fetch_level`（对应 `fetch_level_by_id`）、`pp.calc` 的参数校验与 `build_level_data` 调用顺序（对应 `handle_pp_calc`）、反推的显示格式（对应 `acc_run2`）。修改交互模式里这些行为时，记得同步 JSON 模式，否则两条路径会给出不同结果。
+- **覆盖范围**：17 个操作覆盖了四个菜单的全部能力（见 2.4）：玩家查询/详情/通关记录分页、谱面搜索/详情/CDN 探测/原样与转换下载、PP 计算（含排位变化预览）、XACC 正算/反推/等效组合/配置读写、缓存清空。仍然没有入口的只有 `stats()` 汇总、自定义转换预设的**新建/编辑**（可读取并使用已存预设），以及交互式逐项编辑成本的人工核对流程。
+- **重复实现**：`jsoncli.cpp` 为了实现“无交互”复制了 `menus.cpp` 里的一部分逻辑 —— `fetch_level`（对应 `fetch_level_by_id`）、`pp.calc` 的参数校验与 `build_level_data` 调用顺序（对应 `handle_pp_calc`）、反推的显示格式（对应 `acc_run2`）；`chartdl.cpp` 的下载/转换与 `menus.cpp` 的 `save_download` / `download_level_chart` 是两份实现（URL 形式与预设定义相同）；`rank_change_json` 与 `calculate_rank_changes` 平行，只共用“算加权分”的 `ranked_score_after_candidate`。修改交互模式里这些行为时，记得同步 JSON 模式，否则两条路径会给出不同结果。
+- **判定权重不可配置**：`xacc_model_load` 会把文件里的 `weights` 改回编译期固定表（note 里会提示），因此 `xacc.config` 直接拒绝 `weights` 字段，避免“看起来改了、下次加载又变回去”。
 - **协议版本**：`version` 返回的 `protocol` 目前固定为 `1`，字段只增不改；新增字段属于兼容变更，重命名/删除字段才需要升版本。
 - **stdout 边界**：只重定向了 `std::cout`。任何绕过 `iostream` 直接写文件描述符 1 的代码（当前没有）都会污染响应。
 - **缓存**：JSON 模式与交互模式共用 `cache.json`，因此 `--no-cache`、`cache.clear`、304 复用计数等行为完全一致。
@@ -3339,7 +3418,7 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 | --- | --- | --- |
 | `run` | [`src/main.cpp:16`](../src/main.cpp#L16) | CLI + 主循环 |
 | `main` | [`src/main.cpp:136`](../src/main.cpp#L136) | 顶层异常处理 |
-| `run_json_cli` | [`src/jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | JSON 模式入口（见 15.8） |
+| `run_json_cli` | [`src/jsoncli.cpp:1611`](../src/jsoncli.cpp#L1611) | JSON 模式入口（见 15.8） |
 | `setup_console_utf8` | [`src/console.hpp:23`](../src/console.hpp#L23) | 控制台 UTF-8 |
 | `terminal_width` | [`src/console.hpp:34`](../src/console.hpp#L34) | 终端宽度 |
 | `InputClosed` | [`src/console.hpp:73`](../src/console.hpp#L73) | EOF 异常 |
@@ -3461,7 +3540,7 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 | `save_download` | [`src/menus.cpp:390`](../src/menus.cpp#L390) | 下载保存 |
 | `download_level_chart` | [`src/menus.cpp:528`](../src/menus.cpp#L528) | 下载流程 |
 | `print_level_details` | [`src/menus.cpp:626`](../src/menus.cpp#L626) | 谱面详情 |
-| `ranked_score_after_candidate` | [`src/menus.cpp:670`](../src/menus.cpp#L670) | 排位分估算 |
+| `ranked_score_after_candidate` | [`src/menus.cpp:674`](../src/menus.cpp#L674) | 排位分估算（`menus.hpp` 导出） |
 | `calculate_rank_changes` | [`src/menus.cpp:746`](../src/menus.cpp#L746) | 排名变化 |
 | `handle_pp_calc` | [`src/menus.cpp:851`](../src/menus.cpp#L851) | PP 菜单 |
 | `handle_level_lookup` | [`src/menus.cpp:1006`](../src/menus.cpp#L1006) | 谱面菜单 |
@@ -3477,34 +3556,54 @@ TUFTOOLS_DATA_DIR=$(mktemp -d) ./build/tuftools
 
 ### 15.8 JSON 接口
 
-> 行号基于 `src/jsoncli.cpp`（约 1155 行）。完整协议见 2.4，模块说明见 6.15。
+> 行号基于 `src/jsoncli.cpp`（约 1669 行）。完整协议见 2.4，模块说明见 6.15。
 
 | 符号 | 文件:行 | 说明 |
 | --- | --- | --- |
 | `JsonCliOptions` | [`src/jsoncli.hpp:14`](../src/jsoncli.hpp#L14) | 请求来源与缩进选项 |
-| `run_json_cli` | [`src/jsoncli.cpp:1097`](../src/jsoncli.cpp#L1097) | JSON 模式入口 |
-| `emit_error` | [`src/jsoncli.cpp:1069`](../src/jsoncli.cpp#L1069) | 协议级错误文档（退出码 2） |
-| `strip_utf8_bom` / `read_stream` | [`src/jsoncli.cpp:1081`](../src/jsoncli.cpp#L1081) / [`1088`](../src/jsoncli.cpp#L1088) | 读取请求文本 |
-| `dispatch` | [`src/jsoncli.cpp:997`](../src/jsoncli.cpp#L997) | 操作分发 |
-| `op_names` / `ops_array` | [`src/jsoncli.cpp:981`](../src/jsoncli.cpp#L981) / [`401`](../src/jsoncli.cpp#L401) | 操作清单 |
-| `response_for` | [`src/jsoncli.cpp:1021`](../src/jsoncli.cpp#L1021) | 响应封装 |
-| `OpError` | [`src/jsoncli.cpp:43`](../src/jsoncli.cpp#L43) | 操作级错误（code + extra） |
-| `StdoutRedirect` | [`src/jsoncli.cpp:58`](../src/jsoncli.cpp#L58) | stdout → stderr 重定向 |
-| `Request` | [`src/jsoncli.cpp:148`](../src/jsoncli.cpp#L148) | 带别名的参数读取 |
-| `api_call` | [`src/jsoncli.cpp:221`](../src/jsoncli.cpp#L221) | API 异常 → `api` 错误码 |
-| `difficulty_error_code` | [`src/jsoncli.cpp:232`](../src/jsoncli.cpp#L232) | `未知难度` → `unknown_difficulty` |
-| `rank_json` / `ranks_json` | [`src/jsoncli.cpp:237`](../src/jsoncli.cpp#L237) / [`243`](../src/jsoncli.cpp#L243) | 排名值转 JSON（`?` → `null`） |
-| `fetch_level` | [`src/jsoncli.cpp:251`](../src/jsoncli.cpp#L251) | 按 ID 取谱面（非交互版） |
-| `load_model` | [`src/jsoncli.cpp:259`](../src/jsoncli.cpp#L259) | 加载 XACC 配置 |
-| `status_code` / `solver_code` | [`src/jsoncli.cpp:281`](../src/jsoncli.cpp#L281) / [`293`](../src/jsoncli.cpp#L293) | 机器可读状态/求解器名 |
-| `parse_counts` / `parse_fixed` / `parse_judgements` | [`src/jsoncli.cpp:305`](../src/jsoncli.cpp#L305) / [`324`](../src/jsoncli.cpp#L324) / [`340`](../src/jsoncli.cpp#L340) | 判定数量输入 |
-| `target_text_of` | [`src/jsoncli.cpp:356`](../src/jsoncli.cpp#L356) | 去掉 `%` 与空白 |
-| `fixed_json` / `counts_json` / `passes_json` | [`src/jsoncli.cpp:367`](../src/jsoncli.cpp#L367) / [`373`](../src/jsoncli.cpp#L373) / [`382`](../src/jsoncli.cpp#L382) | 输出格式化 |
-| `resolve_player` | [`src/jsoncli.cpp:449`](../src/jsoncli.cpp#L449) | id/名字/Discord → 唯一玩家 |
-| `level_sort_keys` / `normalize_level_sort` | [`src/jsoncli.cpp:576`](../src/jsoncli.cpp#L576) / [`582`](../src/jsoncli.cpp#L582) | 排序参数归一化 |
-| `parse_reverse_input` | [`src/jsoncli.cpp:784`](../src/jsoncli.cpp#L784) | 反推参数解析 |
-| `target_window_ok` | [`src/jsoncli.cpp:828`](../src/jsoncli.cpp#L828) | 目标窗口预检 |
-| `op_version` … `op_xacc_model` | [`src/jsoncli.cpp:407`](../src/jsoncli.cpp#L407) … [`945`](../src/jsoncli.cpp#L945) | 12 个操作 |
+| `run_json_cli` | [`src/jsoncli.cpp:1611`](../src/jsoncli.cpp#L1611) | JSON 模式入口 |
+| `emit_error` | [`src/jsoncli.cpp:1571`](../src/jsoncli.cpp#L1571) | 协议级错误文档（退出码 2） |
+| `strip_utf8_bom` / `read_stream` / `request_parse_error` | [`src/jsoncli.cpp:1583`](../src/jsoncli.cpp#L1583) / [`1590`](../src/jsoncli.cpp#L1590) / [`1597`](../src/jsoncli.cpp#L1597) | 读取请求文本 / 引号提示 |
+| `dispatch` | [`src/jsoncli.cpp:1494`](../src/jsoncli.cpp#L1494) | 操作分发 |
+| `op_names` / `ops_array` | [`src/jsoncli.cpp:1473`](../src/jsoncli.cpp#L1473) / [`405`](../src/jsoncli.cpp#L405) | 操作清单 |
+| `response_for` | [`src/jsoncli.cpp:1523`](../src/jsoncli.cpp#L1523) | 响应封装 |
+| `OpError` | [`src/jsoncli.cpp:46`](../src/jsoncli.cpp#L46) | 操作级错误（code + extra） |
+| `StdoutRedirect` | [`src/jsoncli.cpp:61`](../src/jsoncli.cpp#L61) | stdout → stderr 重定向 |
+| `Request` | [`src/jsoncli.cpp:152`](../src/jsoncli.cpp#L152) | 带别名的参数读取 |
+| `api_call` | [`src/jsoncli.cpp:225`](../src/jsoncli.cpp#L225) | API 异常 → `api` 错误码 |
+| `difficulty_error_code` | [`src/jsoncli.cpp:236`](../src/jsoncli.cpp#L236) | `未知难度` → `unknown_difficulty` |
+| `rank_json` / `ranks_json` | [`src/jsoncli.cpp:241`](../src/jsoncli.cpp#L241) / [`247`](../src/jsoncli.cpp#L247) | 排名值转 JSON（`?` → `null`） |
+| `fetch_level` | [`src/jsoncli.cpp:255`](../src/jsoncli.cpp#L255) | 按 ID 取谱面（非交互版） |
+| `load_model` | [`src/jsoncli.cpp:263`](../src/jsoncli.cpp#L263) | 加载 XACC 配置 |
+| `status_code` / `solver_code` | [`src/jsoncli.cpp:285`](../src/jsoncli.cpp#L285) / [`297`](../src/jsoncli.cpp#L297) | 机器可读状态/求解器名 |
+| `parse_counts` / `parse_fixed` / `parse_judgements` | [`src/jsoncli.cpp:309`](../src/jsoncli.cpp#L309) / [`328`](../src/jsoncli.cpp#L328) / [`344`](../src/jsoncli.cpp#L344) | 判定数量输入 |
+| `target_text_of` | [`src/jsoncli.cpp:360`](../src/jsoncli.cpp#L360) | 去掉 `%` 与空白 |
+| `fixed_json` / `counts_json` / `passes_json` | [`src/jsoncli.cpp:371`](../src/jsoncli.cpp#L371) / [`377`](../src/jsoncli.cpp#L377) / [`386`](../src/jsoncli.cpp#L386) | 输出格式化 |
+| `full_player` / `resolve_player` | [`src/jsoncli.cpp:440`](../src/jsoncli.cpp#L440) / [`453`](../src/jsoncli.cpp#L453) | id/名字/Discord → 完整玩家 |
+| `level_sort_keys` / `normalize_level_sort` | [`src/jsoncli.cpp:580`](../src/jsoncli.cpp#L580) / [`586`](../src/jsoncli.cpp#L586) | 排序参数归一化（默认 `CLEARS_DESC`） |
+| `parse_reverse_input` | [`src/jsoncli.cpp:795`](../src/jsoncli.cpp#L795) | 反推参数解析 |
+| `target_window_ok` | [`src/jsoncli.cpp:839`](../src/jsoncli.cpp#L839) | 目标窗口预检 |
+| `model_json` | [`src/jsoncli.cpp:956`](../src/jsoncli.cpp#L956) | XACC 模型 → 结果对象 |
+| `rank_change_json` | [`src/jsoncli.cpp:999`](../src/jsoncli.cpp#L999) | 排位分 top-20 重算 + 名次对比 |
+| `level_summary` / `cdn_flags` | [`src/jsoncli.cpp:1140`](../src/jsoncli.cpp#L1140) / [`1161`](../src/jsoncli.cpp#L1161) | 谱面摘要 / `cdnData` 能力判定 |
+| `params_json` / `builtin_presets_json` / `transform_param_text` | [`src/jsoncli.cpp:1171`](../src/jsoncli.cpp#L1171) / [`1177`](../src/jsoncli.cpp#L1177) / [`1203`](../src/jsoncli.cpp#L1203) | 转换参数字符串化与预设清单 |
+| `op_version` … `op_xacc_config` | [`src/jsoncli.cpp:411`](../src/jsoncli.cpp#L411) … [`1384`](../src/jsoncli.cpp#L1384) | 17 个操作 |
+
+### 15.9 谱面下载（JSON 模式）
+
+> 行号基于 `src/chartdl.cpp`（约 275 行）。模块说明见 6.16。
+
+| 符号 | 文件:行 | 说明 |
+| --- | --- | --- |
+| `TransformParams` / `TransformPreset` | [`src/chartdl.hpp:19`](../src/chartdl.hpp#L19) / [`22`](../src/chartdl.hpp#L22) | 有序参数列表与预设结构 |
+| `ChartDownload` | [`src/chartdl.hpp:52`](../src/chartdl.hpp#L52) | 下载结果（`ok/path/bytes/suffixed/error`） |
+| `builtin_transform_presets` | [`src/chartdl.cpp:86`](../src/chartdl.cpp#L86) | 5 个内置转换预设 |
+| `transform_zip_url` / `level_v2_url` | [`src/chartdl.cpp:101`](../src/chartdl.cpp#L101) / [`107`](../src/chartdl.cpp#L107) | CDN 下载 URL |
+| `safe_level_filename` | [`src/chartdl.cpp:111`](../src/chartdl.cpp#L111) | 默认文件名 |
+| `fetch_cdn_data` | [`src/chartdl.cpp:122`](../src/chartdl.cpp#L122) | `/v2/database/levels/<id>/cdnData` |
+| `load_custom_presets` / `save_custom_presets` | [`src/chartdl.cpp:126`](../src/chartdl.cpp#L126) / [`149`](../src/chartdl.cpp#L149) | `settings.json` 的 `transformPresets` |
+| `append_transform_param` | [`src/chartdl.cpp:170`](../src/chartdl.cpp#L170) | 参数校验/规范化 |
+| `download_to_file` | [`src/chartdl.cpp:223`](../src/chartdl.cpp#L223) | 建目录/去重/http_get/ZIP 校验/写盘 |
 
 ---
 

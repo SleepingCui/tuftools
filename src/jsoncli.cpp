@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
@@ -19,8 +20,10 @@
 #include <vector>
 
 #include "api.hpp"
+#include "chartdl.hpp"
 #include "console.hpp"
 #include "info.hpp"
+#include "menus.hpp"
 #include "numfmt.hpp"
 #include "pyjson.hpp"
 #include "tools.hpp"
@@ -72,6 +75,7 @@ private:
 }
 
 std::string solver_code(XaccSolver solver);
+Json rank_change_json(const Json& player, double candidate_score, const std::string& candidate_level_id);
 
 std::string join_strings(const std::vector<std::string>& values, const std::string& separator) {
     std::string out;
@@ -581,6 +585,7 @@ const std::set<std::string>& level_sort_keys() {
 
 std::string normalize_level_sort(const Request& req) {
     std::string sort = upper_ascii(trim(req.text({"sort"}, false)));
+    if (sort.empty()) sort = "CLEARS";  // same default as the interactive search
     std::string base = sort;
     std::string suffix;
     if (base.size() > 5 && base.compare(base.size() - 5, 5, "_DESC") == 0) {
@@ -725,6 +730,12 @@ Json op_pp_calc(const Request& req) {
     Json result = calculator.calculate_score(level_data, *accuracy, misses, speed, no_hold_tap);
     result.set("level_id", level_id.empty() ? Json() : Json(level_id));
     result.set("level", level_info);
+    // The interactive calculator offers an optional rank preview afterwards.
+    if (req.flag({"rankChange", "rank_change"}, false)) {
+        const ResolvedPlayer resolved = resolve_player(req);
+        result.set("rank_change", rank_change_json(resolved.player, result.get("score").number_or(0.0),
+                                                   level_id));
+    }
     return result;
 }
 
@@ -942,9 +953,7 @@ Json op_xacc_equivalents(const Request& req) {
     return out;
 }
 
-Json op_xacc_model(const Request&) {
-    std::string config_note;
-    const XaccModel model = load_model(&config_note);
+Json model_json(const XaccModel& model, const std::string& config_note) {
     Json weights = Json::object();
     Json costs = Json::object();
     Json::Array order;
@@ -976,6 +985,489 @@ Json op_xacc_model(const Request&) {
     return out;
 }
 
+Json op_xacc_model(const Request&) {
+    std::string config_note;
+    const XaccModel model = load_model(&config_note);
+    return model_json(model, config_note);
+}
+
+// ------------------------------------------------------------------ ops: rank ---
+
+// Non-interactive twin of calculate_rank_changes(): the same top-20 weighted
+// ranked-score preview, but the player is given instead of prompted for and the
+// ranks come back as JSON numbers instead of formatted lines.
+Json rank_change_json(const Json& player_in, double candidate_score, const std::string& candidate_level_id) {
+    Json player = player_in;
+    if (!player.has("rankedScoreRank") || !player.has("rankedScore")) {
+        const std::string id = player.get("id").key_text();
+        if (!id.empty() && id != "null") player = full_player(id);
+    }
+    const double old_score = player.get("rankedScore").number_or(0.0);
+
+    double added = 0.0;
+    std::string score_error;
+    const std::optional<double> new_score =
+        ranked_score_after_candidate(player, candidate_score, candidate_level_id, added, score_error);
+    if (!new_score.has_value()) {
+        throw OpError("unavailable", "无法计算加权排位分: " + score_error);
+    }
+
+    // Mirrors calculate_rank_changes(): the country rank always comes from the
+    // leaderboard, the global rank is taken from the player record when present.
+    const Json player_global_rank = player.get("rankedScoreRank");
+    Json future_player = Json::object();
+    future_player.set("country", player.get("country"));
+    future_player.set("rankedScore", num_json(*new_score));
+
+    std::map<std::string, std::string> jobs;
+    jobs["old_country"] = rank_url(player, "rankedScore", "country");
+    jobs["new_global"] = rank_url(future_player, "rankedScore", "global");
+    jobs["new_country"] = rank_url(future_player, "rankedScore", "country");
+    if (player_global_rank.is_null()) jobs["old_global"] = rank_url(player, "rankedScore", "global");
+    std::map<std::string, std::string> wanted;
+    for (const auto& job : jobs) {
+        if (!job.second.empty()) wanted[job.first] = job.second;
+    }
+    const std::map<std::string, RankVal> ranks =
+        api_call("查询排名", [&] { return fetch_ranks(wanted); });
+    auto lookup = [&ranks](const std::string& key) {
+        const auto found = ranks.find(key);
+        return found == ranks.end() ? RankVal::unknown() : found->second;
+    };
+    // A rank of zero means "not ranked yet"; the menu shows it as 1.
+    auto as_one_if_zero = [](const RankVal& value) {
+        return value.is_zero() ? RankVal::from_number(1.0) : value;
+    };
+    const RankVal old_global = as_one_if_zero(
+        player_global_rank.is_null() ? lookup("old_global") : RankVal::from_json(player_global_rank));
+    const RankVal old_country = as_one_if_zero(lookup("old_country"));
+    const RankVal new_global = as_one_if_zero(lookup("new_global"));
+    const RankVal new_country = as_one_if_zero(lookup("new_country"));
+
+    auto rank_entry = [](const RankVal& before, const RankVal& after) {
+        Json entry = Json::object();
+        entry.set("old", rank_json(before));
+        entry.set("new", rank_json(after));
+        // Negative delta means the player moved up the leaderboard.
+        if (before.numeric && after.numeric) entry.set("delta", num_json(after.num - before.num));
+        else entry.set("delta", Json());
+        return entry;
+    };
+
+    Json player_info = Json::object();
+    player_info.set("id", player.get("id"));
+    player_info.set("name", player.get("name"));
+    player_info.set("country", player.get("country"));
+
+    Json ranked_score = Json::object();
+    ranked_score.set("old", num_json(old_score));
+    ranked_score.set("new", num_json(*new_score));
+    ranked_score.set("added", num_json(added));
+
+    Json out = Json::object();
+    out.set("player", player_info);
+    out.set("level_id", candidate_level_id.empty() ? Json() : Json(candidate_level_id));
+    out.set("candidate_score", num_json(candidate_score));
+    out.set("ranked_score", ranked_score);
+    out.set("global", rank_entry(old_global, new_global));
+    out.set("country", rank_entry(old_country, new_country));
+    return out;
+}
+
+Json op_rank_preview(const Request& req) {
+    const ResolvedPlayer resolved = resolve_player(req);
+    const std::optional<double> score = req.number_opt({"score", "calculatedScore", "pp", "ppScore"});
+    if (!score) req.missing("score");
+    if (!std::isfinite(*score) || *score < 0.0) fail_input("score 必须是非负数字");
+    const std::string level_id = req.text({"levelId", "level_id", "selectedLevelId"});
+    Json out = rank_change_json(resolved.player, *score, level_id);
+    out.set("matched_by", resolved.matched_by);
+    return out;
+}
+
+// ------------------------------------------------------------- ops: player ---
+
+// Paged twin of "查看全部通关记录": the interactive menu prints every page in
+// one go, tools need offset/limit instead.
+Json op_player_passes(const Request& req) {
+    const ResolvedPlayer resolved = resolve_player(req);
+    Json player = resolved.player;
+    if (!player.has("rankedScoreRank") || !player.has("totalScoreV2")) {
+        const std::string id = player.get("id").key_text();
+        if (!id.empty() && id != "null") player = full_player(id);
+    }
+    const long long offset = req.integer({"offset", "passOffset", "pass_offset"}, false, 0);
+    if (offset < 0) fail_input("offset 不能为负数");
+    const long long limit = req.integer({"limit", "passLimit", "pass_limit"}, false, kDefaultPassLimit);
+    if (limit < 0) fail_input("limit 不能为负数");
+    const long long cap = req.integer({"passesFetchCap", "fetch_cap"}, false, 64);
+
+    Json::Array rows;
+    long long total = 0;
+    const Json name = player.get("name");
+    if (name.is_string() && !name.as_string().empty()) {
+        const PassList passes = api_call("查询通关记录", [&] {
+            return fetch_all_player_passes(name.as_string(), player.get("id"), cap);
+        });
+        total = static_cast<long long>(passes.rows.size());
+        const long long end = (limit > 0 && offset + limit < total) ? offset + limit : total;
+        for (long long index = offset; index < end; ++index) {
+            rows.push_back(passes.rows[static_cast<std::size_t>(index)]);
+        }
+    }
+
+    Json player_info = Json::object();
+    player_info.set("id", player.get("id"));
+    player_info.set("name", player.get("name"));
+    player_info.set("country", player.get("country"));
+    player_info.set("totalPasses", player.get("totalPasses"));
+
+    const long long count = static_cast<long long>(rows.size());
+    Json out = Json::object();
+    out.set("matched_by", resolved.matched_by);
+    out.set("player", player_info);
+    out.set("total", total);
+    out.set("offset", offset);
+    out.set("limit", limit);
+    out.set("count", count);
+    out.set("hasMore", offset + count < total);
+    out.set("rows", Json::array(rows));
+    return out;
+}
+
+// --------------------------------------------------------- helpers: charts ---
+
+Json level_summary(const Json& level) {
+    Json out = Json::object();
+    out.set("id", level.get("id"));
+    out.set("song", level.get("song"));
+    out.set("artist", level.get("artist"));
+    out.set("creator", level.get("creator"));
+    out.set("difficulty", level.get("difficulty").get("name"));
+    out.set("fileId", level.get("fileId"));
+    out.set("dlLink", level.get("dlLink"));
+    out.set("tilecount", level.get("tilecount"));
+    out.set("baseScore", level.get("baseScore"));
+    out.set("ppBaseScore", level.get("ppBaseScore"));
+    return out;
+}
+
+struct CdnFlags {
+    bool can_transform = false;
+    bool can_download_v2 = false;
+};
+
+// Same gate as download_level_chart() in menus.cpp.
+CdnFlags cdn_flags(const Json& cdn) {
+    const Json metadata = cdn.get("metadata");
+    const Json options = cdn.get("transformOptions");
+    CdnFlags flags;
+    flags.can_transform = metadata.is_object() && options.is_object() &&
+                          !metadata.get("transformUnavailable").truthy();
+    flags.can_download_v2 = flags.can_transform && options.get("version").as_int() >= 18;
+    return flags;
+}
+
+Json params_json(const TransformParams& params) {
+    Json out = Json::object();
+    for (const auto& param : params) out.set(param.first, param.second);
+    return out;
+}
+
+Json builtin_presets_json() {
+    Json::Array array;
+    long long index = 0;
+    for (const TransformPreset& preset : builtin_transform_presets()) {
+        ++index;
+        Json entry = Json::object();
+        entry.set("index", index);
+        entry.set("key", preset.key);
+        entry.set("name", preset.name);
+        entry.set("params", params_json(preset.params));
+        array.push_back(entry);
+    }
+    return Json::array(array);
+}
+
+std::string builtin_preset_names() {
+    std::string text;
+    long long index = 0;
+    for (const TransformPreset& preset : builtin_transform_presets()) {
+        ++index;
+        if (!text.empty()) text += ", ";
+        text += std::to_string(index) + " " + preset.key + "(" + preset.name + ")";
+    }
+    return text;
+}
+
+std::string transform_param_text(const Json& value, const std::string& key) {
+    if (value.is_string()) return value.as_string();
+    if (value.is_bool()) return value.as_bool() ? "true" : "false";
+    if (value.is_number()) return value.key_text();
+    fail_input("params." + key + " 必须是字符串");
+}
+
+// ------------------------------------------------------------- ops: level ---
+
+Json op_level_cdn(const Request& req) {
+    const std::string level_id = req.text({"id", "levelId", "level_id"});
+    if (level_id.empty()) req.missing("id");
+    const Json level = api_call("查询谱面", [&] { return fetch_level(level_id); });
+
+    Json cdn;
+    std::string cdn_error;
+    try {
+        cdn = api_call("读取转换选项", [&] { return fetch_cdn_data(level_id); });
+    } catch (const std::exception& e) {
+        cdn_error = e.what();
+    }
+    const CdnFlags flags = cdn_flags(cdn);
+
+    Json custom;
+    std::string presets_error;
+    try {
+        custom = load_custom_presets();
+    } catch (const std::exception& e) {
+        presets_error = e.what();
+    }
+
+    Json out = Json::object();
+    out.set("level", level_summary(level));
+    out.set("can_download_original", Json(!level.get("dlLink").as_string().empty()));
+    out.set("can_transform", Json(flags.can_transform));
+    out.set("can_download_v2", Json(flags.can_download_v2));
+    out.set("metadata", cdn.get("metadata"));
+    out.set("transform_options", cdn.get("transformOptions"));
+    out.set("builtin_presets", builtin_presets_json());
+    out.set("custom_presets", custom.is_null() ? Json::array() : custom);
+    if (!cdn_error.empty()) out.set("cdn_error", cdn_error);
+    if (!presets_error.empty()) out.set("presets_error", presets_error);
+    return out;
+}
+
+Json op_level_download(const Request& req) {
+    const std::string level_id = req.text({"id", "levelId", "level_id"});
+    if (level_id.empty()) req.missing("id");
+    std::string mode = lower_ascii(trim(req.text({"mode", "downloadMode"}, false)));
+    if (mode.empty()) mode = "original";
+    if (mode == "raw" || mode == "zip") mode = "original";
+    if (mode == "v2" || mode == "adofai" || mode == "level-v2") mode = "v2";
+    if (mode == "convert" || mode == "transform_zip") mode = "transform";
+
+    const Json level = api_call("查询谱面", [&] { return fetch_level(level_id); });
+    const std::string file_id = level.get("fileId").as_string();
+
+    std::string url;
+    std::string default_name;
+    bool expect_zip = true;
+    Json params_out;
+    TransformParams params;
+
+    if (mode == "original") {
+        url = level.get("dlLink").as_string();
+        if (url.empty()) throw OpError("api", "该谱面没有可用的下载链接。");
+        default_name = safe_level_filename(level, ".zip");
+    } else if (mode == "v2") {
+        if (file_id.empty()) throw OpError("api", "谱面缺少 CDN fileId，无法下载 V2 文件。");
+        const CdnFlags flags = cdn_flags(api_call("读取转换选项", [&] { return fetch_cdn_data(level_id); }));
+        if (!flags.can_download_v2) throw OpError("api", "当前谱面不支持下载 V2 .adofai。");
+        url = level_v2_url(file_id);
+        default_name = safe_level_filename(level, ".adofai");
+        expect_zip = false;
+    } else if (mode == "transform") {
+        if (file_id.empty()) throw OpError("api", "谱面缺少 CDN fileId，无法转换。");
+        const CdnFlags flags = cdn_flags(api_call("读取转换选项", [&] { return fetch_cdn_data(level_id); }));
+        if (!flags.can_transform) throw OpError("api", "当前谱面不支持转换下载。");
+
+        const std::string preset = trim(req.text({"preset", "transformPreset", "transform_preset"}, false));
+        const std::string custom_name =
+            trim(req.text({"customPreset", "custom_preset", "presetName", "preset_name"}, false));
+        const Json raw_params = req.get("params");
+        const int provided = (preset.empty() ? 0 : 1) + (custom_name.empty() ? 0 : 1) +
+                             (raw_params.is_null() ? 0 : 1);
+        if (provided == 0) fail_input("transform 模式需要 preset、customPreset 或 params 之一");
+        if (provided > 1) fail_input("preset、customPreset、params 只能提供其中一个");
+
+        if (!preset.empty()) {
+            bool found = false;
+            if (const auto index = try_parse_int(preset)) {
+                const auto& builtins = builtin_transform_presets();
+                if (*index >= 1 && static_cast<std::size_t>(*index) <= builtins.size()) {
+                    params = builtins[static_cast<std::size_t>(*index - 1)].params;
+                    found = true;
+                }
+            }
+            if (!found) {
+                for (const TransformPreset& item : builtin_transform_presets()) {
+                    if (item.key == preset || item.name == preset) {
+                        params = item.params;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) fail_input("未知转换预设 \"" + preset + "\"（可用: " + builtin_preset_names() + "）");
+        } else if (!custom_name.empty()) {
+            const Json custom = load_custom_presets();
+            bool found = false;
+            for (const Json& item : custom.elements()) {
+                if (item.get("name").as_string() != custom_name) continue;
+                for (const auto& param : item.get("params").items()) {
+                    std::string error;
+                    if (!append_transform_param(params, param.first, transform_param_text(param.second, param.first), error)) {
+                        throw OpError("invalid_input", "自定义预设 " + custom_name + " 的参数无效: " + error);
+                    }
+                }
+                found = true;
+                break;
+            }
+            if (!found) fail_input("未知自定义预设 \"" + custom_name + "\"");
+        } else {
+            if (!raw_params.is_object()) fail_input("params 必须是对象");
+            for (const auto& param : raw_params.items()) {
+                std::string error;
+                if (!append_transform_param(params, param.first, transform_param_text(param.second, param.first), error)) {
+                    throw OpError("invalid_input", "params." + param.first + " 无效: " + error);
+                }
+            }
+            if (params.empty()) fail_input("params 不能为空");
+        }
+        url = transform_zip_url(file_id, params);
+        default_name = safe_level_filename(level, "_converted.zip");
+        params_out = params_json(params);
+    } else {
+        fail_input("未知下载方式 \"" + mode + "\"（可用: original、transform、v2）");
+    }
+
+    const std::string output = req.text({"output", "path", "outputPath", "output_path"}, false);
+    const std::string directory = req.text({"directory", "dir"}, false);
+    const std::string filename = req.text({"filename", "file_name"}, false);
+    const std::string name = filename.empty() ? default_name : filename;
+    std::string path;
+    if (!output.empty()) {
+        bool treat_as_directory = !output.empty() && (output.back() == '/' || output.back() == '\\');
+        if (!treat_as_directory) {
+            std::error_code fs_error;
+            treat_as_directory = std::filesystem::is_directory(std::filesystem::u8path(output), fs_error);
+        }
+        path = treat_as_directory ? (std::filesystem::u8path(output) / std::filesystem::u8path(name)).u8string()
+                                  : output;
+    } else {
+        const std::filesystem::path base =
+            directory.empty() ? std::filesystem::current_path() : std::filesystem::u8path(directory);
+        path = (base / std::filesystem::u8path(name)).u8string();
+    }
+
+    const ChartDownload download = download_to_file(url, path, expect_zip);
+    if (!download.ok) {
+        OpError error("download", download.error);
+        error.extra = Json::object();
+        error.extra.set("url", url);
+        error.extra.set("path", path);
+        throw error;
+    }
+
+    Json out = Json::object();
+    out.set("level", level_summary(level));
+    out.set("mode", mode);
+    out.set("url", url);
+    out.set("path", download.path);
+    out.set("bytes", static_cast<long long>(download.bytes));
+    out.set("suffixed", download.suffixed);
+    out.set("expect_zip", expect_zip);
+    if (!params_out.is_null()) out.set("params", params_out);
+    return out;
+}
+
+// ----------------------------------------------------------- ops: xacc cfg ---
+
+Json op_xacc_config(const Request& req) {
+    std::string config_note;
+    XaccModel model = load_model(&config_note);
+    bool modified = false;
+    bool rounded = false;
+
+    // Judgement weights are a fixed game rule: xacc_model_load() rewrites any custom
+    // weights back to the compiled-in table, so accepting them here would look like it
+    // worked and then silently revert on the next load. Reject them instead.
+    if (!req.get("weights").is_null()) {
+        fail_input("判定权重是固定规则，不可修改（读取权重请用 xacc.model）");
+    }
+
+    const Json costs = req.get("costs");
+    if (!costs.is_null()) {
+        if (!costs.is_object()) fail_input("costs 必须是对象");
+        for (const auto& item : costs.items()) {
+            if (std::find(model.order.begin(), model.order.end(), item.first) == model.order.end()) {
+                fail_input("未知判定难度系数 \"" + item.first + "\"（可用: " +
+                           judgement_keys_text(model.order) + "）");
+            }
+            const double value = value_number(item.second, item.first);
+            std::int64_t units = 0;
+            bool exact = false;
+            if (!xacc_units_from_value(value, model.cost_scale, units, exact) || !exact) {
+                fail_input("输入无效，无法用 1/" + std::to_string(model.cost_scale) +
+                           " 的精度表示: " + py_float_str(value));
+            }
+            if (units < 0) fail_input("难度系数不能为负数: " + item.first);
+            model.cost_units[item.first] = units;
+            modified = true;
+        }
+    }
+
+    if (const auto max_nodes = req.integer_opt({"maxNodes", "max_nodes"})) {
+        if (*max_nodes <= 0) fail_input("max_nodes 必须大于 0");
+        model.max_nodes = *max_nodes;
+        modified = true;
+    }
+    if (const auto max_dp_cells = req.integer_opt({"maxDpCells", "max_dp_cells"})) {
+        if (*max_dp_cells <= 0) fail_input("max_dp_cells 必须大于 0");
+        model.max_dp_cells = *max_dp_cells;
+        modified = true;
+    }
+    if (const auto max_seconds = req.number_opt({"maxSeconds", "max_seconds"})) {
+        if (!(*max_seconds > 0.0) || *max_seconds > 86400.0) fail_input("max_seconds 必须大于 0 且不超过 86400");
+        model.max_seconds = *max_seconds;
+        modified = true;
+    }
+    if (const auto cost_scale = req.integer_opt({"costScale", "cost_scale"})) {
+        if (*cost_scale <= 0) fail_input("cost_scale 必须大于 0");
+        if (*cost_scale != model.cost_scale) {
+            // Same rescale as acc_edit_solver_params(): keep the displayed cost
+            // values identical while changing the storage precision.
+            const long double factor =
+                static_cast<long double>(*cost_scale) / static_cast<long double>(model.cost_scale);
+            for (auto& entry : model.cost_units) {
+                const long double scaled = static_cast<long double>(entry.second) * factor;
+                if (scaled > 9.0e15L) {
+                    entry.second = 9000000000000000LL;
+                    rounded = true;
+                    continue;
+                }
+                const long long value = std::llround(scaled);
+                if (std::fabs(scaled - static_cast<long double>(value)) > 1.0e-6L) rounded = true;
+                entry.second = value;
+            }
+            model.cost_scale = *cost_scale;
+            modified = true;
+        }
+    }
+
+    const bool save = req.flag({"save"}, true);
+    bool saved = false;
+    if (modified && save) {
+        std::string error;
+        if (!xacc_model_save(model, error)) throw OpError("config", "保存失败: " + error);
+        saved = true;
+    }
+
+    Json out = model_json(model, config_note);
+    out.set("modified", modified);
+    out.set("saved", saved);
+    out.set("rounded", rounded);
+    return out;
+}
+
 // -------------------------------------------------------------- dispatch ---
 
 const std::vector<std::string>& op_names() {
@@ -984,13 +1476,18 @@ const std::vector<std::string>& op_names() {
                                                    "player.search",
                                                    "player.get",
                                                    "player.details",
+                                                   "player.passes",
                                                    "level.search",
                                                    "level.get",
+                                                   "level.cdn",
+                                                   "level.download",
                                                    "pp.calc",
+                                                   "rank.preview",
                                                    "xacc.calc",
                                                    "xacc.reverse",
                                                    "xacc.equivalents",
-                                                   "xacc.model"};
+                                                   "xacc.model",
+                                                   "xacc.config"};
     return names;
 }
 
@@ -1008,13 +1505,18 @@ Json dispatch(const Json& doc, std::string& op_out) {
     if (op == "player.search") return op_player_search(req);
     if (op == "player.get") return op_player_get(req);
     if (op == "player.details") return op_player_details(req);
+    if (op == "player.passes") return op_player_passes(req);
     if (op == "level.search") return op_level_search(req);
     if (op == "level.get") return op_level_get(req);
+    if (op == "level.cdn") return op_level_cdn(req);
+    if (op == "level.download") return op_level_download(req);
     if (op == "pp.calc") return op_pp_calc(req);
+    if (op == "rank.preview") return op_rank_preview(req);
     if (op == "xacc.calc") return op_xacc_calc(req);
     if (op == "xacc.reverse") return op_xacc_reverse(req);
     if (op == "xacc.equivalents") return op_xacc_equivalents(req);
     if (op == "xacc.model") return op_xacc_model(req);
+    if (op == "xacc.config") return op_xacc_config(req);
     throw OpError("unknown_op", "未知操作: " + op + "（可用操作: " + join_strings(op_names(), ", ") + "）");
 }
 

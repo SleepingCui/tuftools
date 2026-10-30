@@ -664,6 +664,10 @@ void print_level_details(const Json& level) {
     if (!notes.empty()) std::cout << "备注: " << notes << std::endl;
 }
 
+}  // namespace
+
+// Shared with jsoncli.cpp (rank.preview): the top-20 weighted ranked score keeps
+// the best pass per level, so a repeated candidate cannot occupy two slots.
 constexpr size_t kRankedScoreLimit = 20;
 constexpr double kRankedScoreWeight = 0.9;
 
@@ -738,8 +742,6 @@ std::optional<double> ranked_score_after_candidate(const Json& player, double ca
     added_score = new_weighted_score - old_weighted_score;
     return current_ranked_score + added_score;
 }
-
-}  // namespace
 
 // ============================================================== ppcalc.py ====
 
